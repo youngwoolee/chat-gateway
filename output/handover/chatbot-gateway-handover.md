@@ -16,13 +16,13 @@ Gateway → Eureka → search-autocomplete-service
 
 | 구성 | 담당 책임 |
 |---|---|
-| Gateway | Java 21 / Spring Boot 3.5.16 / MVC·Tomcat / Spring Cloud Gateway Server Web MVC. 인증 및 중계 담당. |
+| Gateway | Java 21 / Spring Boot 3.5.16 / MVC·Tomcat / SseEmitter. 인증 및 중계 담당. |
 | Agent B/E | 대화 이력·thread 소유권, 게스트 이력 연결, 금융 업무 실행 및 중복 실행 방지. |
 | agent-session-service | 세션 및 인증 문맥 저장, 교체·연장·인증 소비의 원자 처리. Redis/Hazelcast는 이 서비스 내부 책임. |
 | PFC / MCI | 로그인 신원 검증, 추가 인증, 홈페이지 연동 쿠키. 실제 운영 구현은 미완료. |
 | Document DB / Search | DB는 staging 허용 고객 원본. 자동완성은 별도 search-autocomplete-service 호출. |
 
-인수인계 핵심: GW에는 대화 이력·업무 실행 상태를 저장하지 않는다. local mock의 성공을 실제 내부 시스템 연동 완료로 설명하지 않는다.
+인수인계 핵심: GW에는 대화 이력·업무 실행 상태를 저장하지 않는다. offline mock의 성공을 실제 내부 시스템 연동 완료로 설명하지 않는다.
 
 ## 02  세션과 로그인 흐름
 
@@ -49,23 +49,23 @@ Idempotency-Key는 새 활동마다 새 값, 네트워크 재전송에는 같은
 ## 03  대화 중계와 SSE
 
 ```text
-Front → Filter → 인증 서비스 → 세션 서비스 / 권한 확인
-인증 서비스 → (필요 시) MFA 검증 → Filter
-Filter → Routes + Headers → 채널별 Agent B/E
-Agent B/E → 공식 Gateway handler → Front (HTTP/SSE)
+Front → Controller → 인증 서비스 → 세션 서비스 / 권한 확인
+인증 서비스 → (필요 시) MFA 검증 → ChatService
+ChatService → AgentBackendClient → 채널별 Agent B/E
+Agent B/E → ChatService(HTTP) / SseRelayService(SSE) → Front
 ```
 
 | 코드/단계 | 확인할 동작 |
 |---|---|
-| ChatGatewayFilter | 허용 경로·동시 요청 상한 검사. chat JSON 최대 1MiB, threadId와 MFA 헤더 해석. 본문 원문 보존 및 응답 자원 반환. |
+| ChatService | chat/tool/history로 발화·도구·조회 구분. 입력 검증·인증 후 B/E 호출. |
 | ChatAuthenticationService | 세션 인증 → 필요한 회원/thread 인증 문맥 저장 → MFA 결과 검증. 업무 실행을 직접 수행하지 않음. |
 | SessionAuthentication | 채널·thread·세션 검증. staging 권한 확인. 명시적 로그인 전환 또는 활동 만료 연장. |
-| ChatGatewayRoutes / GatewayHeaders | 세션 채널로 목적지 결정. /api/chat… → /internal/v1/chat… . 외부 신원 헤더 제거 후 검증된 신원 주입. |
-| 공식 Gateway handler | Agent 응답의 HTTP/SSE 중계. 이벤트 파싱·재직렬화 및 자체 heartbeat 생성 없음. |
+| AgentBackendClient / BackendHeaders | RestClient chat/executeTool/history 사용. /api/chat… → /internal/v1/chat… . 외부 신원 헤더 제거 후 검증된 신원 주입. |
+| SseRelayService | MVC emitter 초기화 후 B/E SSE 바이트를 순차 전달. 완료·단절·오류에서 연결과 동시 요청 슬롯 반환. |
 
 ### SSE를 설명할 때 강조할 내용
 
-SseEmitter를 직접 사용하지 않아도 공식 Gateway MVC handler가 스트림을 전달한다. Netty 기반 서비스가 아니며, Tomcat과 Java 21 가상 스레드에서 동작한다.
+Controller → Service → Client로 일반 HTTP를 처리하고, SSE는 SseEmitter로 전달한다. Spring Cloud Gateway 전용 중계는 제거했다. Tomcat과 Java 21 가상 스레드에서 동작한다.
 
 요청 진입 시 인증을 통과했다면 세션 자연 만료로 진행 중인 SSE를 끊지 않는다. 기본 upstream 읽기 간격 제한은 30초이므로 B/E heartbeat 주기와 맞춰야 한다. SSE 커밋 후 오류는 JSON 추가 대신 연결 종료로 처리한다.
 
@@ -105,22 +105,24 @@ GW 자체 FE 오류는 주로 400(입력), 401(인증), 403(권한), 503(연동 
 
 | 영역 / 클래스 | 수정할 때 확인할 책임 |
 |---|---|
+| controller/ChatController | 대화·도구·이력 공개 경로. 일반 응답 또는 SseEmitter 반환. |
 | controller/ChatSessionController | 세션 생성·restart 요청과 응답 DTO. |
 | service/SessionAuthentication | createOrReuse / inspect / authenticateActivity / restart. 세션 수명과 로그인 전환의 중심. |
-| gateway/ChatGatewayFilter | 요청 검사·본문 재사용·중계 자원 관리. SSE 종료/오류 관련 수정 시 확인. |
+| service/ChatService | 요청 검사·본문 재사용·중계 자원 관리. SSE 종료/오류 관련 수정 시 확인. |
 | service/ChatAuthenticationService | 세션·인증 문맥·MFA를 순서대로 연결하는 중계 인증 서비스. |
-| gateway/ChatGatewayRoutes, GatewayHeaders | 공개 경로·목적지 선택, 신원 헤더 제거/주입. |
+| service/SseRelayService | SseEmitter 초기화 이후 읽기 시작. 완료·오류 콜백으로 자원 반환. |
+| client/agent/AgentBackendClient, BackendHeaders | 공개 경로·목적지 선택, 신원 헤더 제거/주입. |
 | service/ChannelAccessService | staging 고객 허용 검사와 Caffeine 캐시. |
-| config/ChannelAccessConfiguration | Mongo 호환 DB 조회와 local 테스트 목록 구성. |
+| config/ChannelAccessConfiguration | Mongo 호환 DB 조회와 offline 테스트 목록 구성. |
 | service/MfaService, gateway/MfaResultParser | 추가 인증 업무 흐름 / HTTP 헤더 파싱. |
 | client/session/HttpSessionServiceClient | 세션 API 호출·응답 검증. 저장소를 직접 구현하지 않음. |
-| session/AuthorityStore, LocalAuthorityStore | 외부 원자 명령 계약 / local 전용 메모리 구현. |
-| client/pfc/PfcClient, MockPfcClient | 운영 PFC 구현 경계 / local 테스트 구현. |
+| session/AuthorityStore, LocalAuthorityStore | 외부 원자 명령 계약 / src/offline 메모리 구현. |
+| client/pfc/PfcClient, MockPfcClient | 운영 PFC 구현 경계 / offline 테스트 구현. |
 | service/ClickService, client/search/AutocompleteClient | 클릭 로그·활동 연장 / 자동완성 요청·응답 계약. |
 
 ### 변경 요청별 빠른 탐색
 
-로그인 정책 → SessionAuthentication. staging 권한 → ChannelAccessService. B/E 주소 → ChatGatewayRoutes와 설정. 세션 API 계약 → AuthorityStore와 HttpSessionServiceClient. SSE 장애 → Filter, GatewayHttpClient, UpstreamClients와 Proxy 테스트.
+로그인 정책 → SessionAuthentication. staging 권한 → ChannelAccessService. B/E 주소 → AgentBackendClient와 설정. 세션 API 계약 → AuthorityStore와 HttpSessionServiceClient. SSE 장애 → SseRelayService, AgentBackendClient, UpstreamClients와 Proxy 테스트.
 
 범용 서비스·전략 계층을 추가하기 전에 기존 책임 경계를 확인한다. 응답 크기 제한, 신원 검증, 원자 교체, 중복 소비 방지는 단순화를 이유로 제거하지 않는다.
 
@@ -132,7 +134,7 @@ production은 기존 인증 정책을 유지한다. staging은 PFC로 인증한 
 |---|---|
 | chat.channels.allowed | 허용 채널 ID → PFC. staging 채널도 이 목록에 등록. |
 | chat.staging.channels | staging 채널 ID → Agent B/E HTTP(S) 주소. |
-| chat.python.base-url | staging 외 채널의 production B/E 주소. |
+| chat.backend.base-url | staging 외 채널의 production B/E 주소. |
 | chat.staging.cache-ttl / cache-size | 기본 1분 / 10,000개. 채널+PID 단위 허용·거절 결과 캐싱. |
 | chat.staging.mongo-uri / database | 외부에서 주입할 Mongo 호환 URI / 기본 chat_gateway. |
 | DB 컬렉션 | channel_customer_access: channelId, customerId, enabled(boolean). channelId+customerId 고유 인덱스 필요. |
@@ -144,7 +146,7 @@ chat:
     allowed:
       "prod-channel": PFC
       "stage-channel": PFC
-  python:
+  backend:
     base-url: https://production-agent.internal
   staging:
     channels:
@@ -164,20 +166,20 @@ chat:
 ### 로컬 실행
 
 ```
-./gradlew bootRun --args='--spring.profiles.active=local'
+./gradlew bootRunOffline
 ./gradlew spotlessApply check bootJar --console=plain
 ```
 
-Java 21이 필요하다. local은 메모리 세션, MockPfcClient, 설정 기반 허용 고객 목록을 사용한다. 실제 운영에 local 프로필을 사용하지 않는다. B/E는 별도 mock/실행 서버가 있어야 대화 중계를 테스트할 수 있다.
+Java 21이 필요하다. offline은 메모리 세션, MockPfcClient, 설정 기반 허용 고객 목록을 사용한다. local/dev/prod는 실제 서비스 연동용이고 offline과 혼용하지 않는다. 임시 코드·테스트는 src/offline에 있으며 기본 배포 JAR에서 제외한다. B/E는 별도 mock/실행 서버가 있어야 대화 중계를 테스트할 수 있다.
 
-Swagger UI: http://localhost:8080/docs/index.html (local 전용). 포트 충돌 시 실제 실행 포트로 변경한다. HttpOnly/Secure 쿠키의 브라우저 동작은 동일 Origin HTTPS 환경에서 확인한다.
+Swagger UI: http://localhost:8080/docs/index.html (local·offline 전용). 포트 충돌 시 실제 실행 포트로 변경한다. HttpOnly/Secure 쿠키의 브라우저 동작은 동일 Origin HTTPS 환경에서 확인한다.
 
 | 파일/검증 | 사용 방법 |
 |---|---|
-| http/session-local.http | 세션 생성·로그인 전환·restart 등 기본 시나리오. 환경 baseUrl 확인. |
-| http/staging-local.http | ...0002 staging 채널의 게스트 거절 / local-member 허용. 기본 B/E localhost:8002. |
-| http/autocomplete-local.http | 검색 서비스 요청/응답. local 주소는 AUTOCOMPLETE_BASE_URL로 지정. |
-| 테스트 보고서 | build/reports/tests/test/index.html. 클릭 AUDIT 반영 후 전체 148개 통과, 오류·실패·skip 0. 코드 검사·실행 JAR 빌드 통과. |
+| src/offline/http/session-offline.http | 세션 생성·로그인 전환·restart 등 기본 시나리오. 환경 baseUrl 확인. |
+| src/offline/http/staging-offline.http | ...0002 staging 채널의 게스트 거절 / local-member 허용. 기본 B/E localhost:8002. |
+| src/offline/http/autocomplete-offline.http | 검색 서비스 요청/응답. local 주소는 AUTOCOMPLETE_BASE_URL로 지정. |
+| 테스트 보고서 | build/reports/tests/test/index.html 및 offlineTest/index.html. SseEmitter 전환 후 전체 테스트·코드 검사·빌드 결과는 테스트 보고서에서 확인한다. |
 | 중점 회귀 테스트 | SessionAuthenticationTest, MfaServiceTest, StagingAccessHttpTest, ChannelAccessServiceTest, ProxyTransportTest, ProxyDisconnectTest. |
 
 ### 운영 인수 전에 남은 사항

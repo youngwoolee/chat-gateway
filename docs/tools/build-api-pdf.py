@@ -56,7 +56,8 @@ def api(path, method='post', spec=fe):
     text('응답: '+', '.join(str(c) for c in op['responses'] if c!='default')+' (그 외 오류는 공통 오류 규격 참조)')
 
 title('Chat Gateway API 연동 가이드')
-text('프론트 및 Agent B/E 공유용 | 2026-10-20 | OpenAPI '+fe['info']['version'])
+text('MVC·Tomcat 기반 Controller → Service → Client 구조입니다. 일반 HTTP는 원문 응답, SSE는 SseEmitter로 전달하며 Spring Cloud Gateway 중계는 사용하지 않습니다.')
+text('프론트 및 Agent B/E 공유용 | 2026-10-21 | OpenAPI '+fe['info']['version'])
 text('G/W는 인증과 HTTP/SSE 중계를 담당합니다. 대화 소유권·금융 업무 실행은 Agent B/E가 담당합니다. 이 문서는 현재 구현 기준이며 실제 PFC·세션 서비스 연동 완료를 의미하지 않습니다.')
 subtitle('01 · 프론트 호출 순서')
 table([['상황','처리 순서'],['첫 진입','threadId 생성 → POST session → 응답 threadId로 POST chat'],['새 대화','기존 SSE 종료 → 새 threadId → POST session/restart (200)'],['게스트 로그인','플랫폼 로그인 → _O 쿠키 발급 → 같은 threadId로 chat + X-Requested-Login: true → 회원 전환'],['쿠키 유실','회원: 플랫폼 재인증 후 기존 threadId로 새 세션. B/E 소유권 확인 필수. 게스트: 새 threadId로 새 대화'],['버튼 클릭','POST click으로 시나리오 진행 상태 전달. G/W가 활동 연장 후 자체 JSON 로그 기록, 200'],['추가 인증','SDK 결과 → X-Mfa-Result → POST chat resume. B/E가 업무 실행']])
@@ -128,7 +129,7 @@ api('/internal/v1/auth/operations',spec=be)
 text('ssn/iPin 중 하나 이상 필요. code/usage/content 필수이며 각 고객 대조값 최대2048자입니다. actionHash는43자 base64url 형식, interfaceId는 서버 허용 목록에 있어야 합니다.')
 text('200 응답: {"authReqId":"ar_...", "sdkInput":"...", "expiresAt":1792455000000}\n같은 회원·채널·thread·업무 범위의 key와 내용은 같은 등록을 반환합니다. 내용 변경은409입니다. 한 업무의 복수 인증은 서로 다른 key로 등록합니다.')
 subtitle('로컬 검증 및 배포 전 확인')
-text('local 프로필은 메모리 세션 저장소와 PFC mock을 사용합니다. 앱 재시작 시 세션이 사라집니다. 채팅은 B/E 또는 mock 서버가 필요하며 클릭은 GW 로그로 확인합니다.')
+text('offline 프로필은 메모리 세션 저장소와 PFC mock을 사용합니다. 앱 재시작 시 세션이 사라집니다. 채팅은 B/E 또는 mock 서버가 필요하며 클릭은 GW 로그로 확인합니다.')
 text('PFC/SDK·세션 서비스 원자성·Redis/Hazelcast 장애 전환·B/E 소유권·운영 로그 수집·iOS 웹뷰 쿠키는 별도 연동 검증 대상입니다. 실고객 대조값이나 서비스 자격증명을 예제·로그에 기록하지 않습니다.')
 
 def footer(c,d):
@@ -139,4 +140,42 @@ def footer(c,d):
 output=root/'output/pdf/gateway-api-guide.pdf'
 output.parent.mkdir(parents=True,exist_ok=True)
 SimpleDocTemplate(str(output),pagesize=A4,rightMargin=44,leftMargin=44,topMargin=40,bottomMargin=54,title='Chat Gateway API 연동 가이드',author='Chat Gateway').build(story,onFirstPage=footer,onLaterPages=footer)
+print(output)
+
+# B/E 문서는 Markdown 원본에서 PDF를 생성하여 공유본의 중복 수정을 피한다.
+story = []
+lines = (root/'docs/backend-integration-spec.md').read_text().splitlines()
+index = 0
+while index < len(lines):
+    line = lines[index]
+    if line.startswith('```'):
+        block = []
+        index += 1
+        while index < len(lines) and not lines[index].startswith('```'):
+            block.append(lines[index])
+            index += 1
+        text('\n'.join(block))
+    elif line.startswith('|'):
+        rows = []
+        while index < len(lines) and lines[index].startswith('|'):
+            row = [cell.strip().replace('`','') for cell in lines[index].strip('|').split('|')]
+            if not all(set(cell) <= set('-: ') for cell in row):
+                rows.append(row)
+            index += 1
+        count = len(rows[0])
+        table(rows, [507/count]*count if count > 2 else [150,357])
+        continue
+    elif line.startswith('# '):
+        title(line[2:])
+    elif line.startswith('## '):
+        if line.startswith(('## 3.', '## 4.', '## 6.', '## 7.')):
+            story.append(PageBreak())
+        subtitle(line[3:])
+    elif line.strip():
+        text(line.replace('`',''))
+    index += 1
+output = root/'output/pdf/backend-integration-spec.pdf'
+SimpleDocTemplate(str(output), pagesize=A4, rightMargin=44, leftMargin=44,
+    topMargin=40, bottomMargin=54, title='Agent B/E 연동 명세').build(
+        story, onFirstPage=footer, onLaterPages=footer)
 print(output)

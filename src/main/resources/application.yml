@@ -7,12 +7,6 @@ spring:
     loadbalancer:
       retry:
         enabled: false
-    gateway:
-      server:
-        webmvc:
-          # 도구 실행 본문은 form을 포함해 원문 그대로 중계한다.
-          form-filter:
-            enabled: false
   threads:
     virtual:
       enabled: true
@@ -44,7 +38,7 @@ eureka:
     register-with-eureka: false
     fetch-registry: true
     service-url:
-      defaultZone: ${EUREKA_URL:http://localhost:8761/eureka/}
+      defaultZone: ${EUREKA_URL}
 chat:
   # FE 피드백 반영 제안값. 실제 PFC 수단·위자드 체류시간 합의 후 조정한다.
   mfa:
@@ -63,7 +57,7 @@ chat:
     connect-timeout-millis: 3000
     response-timeout: 30s
     max-streams: 100
-    base-url: ${BACKEND_BASE_URL:http://127.0.0.1:8000}
+    base-url: ${BACKEND_BASE_URL}
   session:
     # 발화·도구 실행 등 인정 활동으로 연장하는 세션 유효시간
     idle-timeout: 5m

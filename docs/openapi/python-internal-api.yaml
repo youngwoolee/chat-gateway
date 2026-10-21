@@ -1,38 +1,79 @@
 openapi: 3.0.3
 info:
-  title: Proposed B/E to Gateway authentication registration
-  version: 0.3.0
-  description: Multiple registrations per operation; resume proof forwarding replaces the old callback. See ../agent-api-gw-session-summary.md.
+  title: Agent B/E ↔ Gateway 연동 API
+  version: 1.0.0
+  description: '2026-10-21 구현 기준. 경로별 서버를 구분: /internal/v1/chat*는 Agent B/E가 구현, /internal/v1/auth/operations는
+    Gateway가 구현. 상세 계약은 backend-integration-spec.md. 실제 PFC·세션 서비스 연동은 미완료.'
 security:
-  - service: []
+- service: []
 paths:
   /internal/v1/auth/operations:
     post:
-      summary: Register an authentication request idempotently within member/channel/thread/operation/key
+      summary: 'B/E → GW: 업무별 추가 인증 등록'
       parameters:
-        - name: X-Auth-Context
-          in: header
-          required: true
-          schema: {type: string}
+      - name: X-Auth-Context
+        in: header
+        required: true
+        schema:
+          type: string
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [key, operationId, version, interfaceId, actionHash, code, usage, content]
-              description: At least one of ssn or iPin is required; use platform-approved protected values, never log bodies.
+              required:
+              - key
+              - operationId
+              - version
+              - interfaceId
+              - actionHash
+              - code
+              - usage
+              - content
+              description: At least one of ssn or iPin is required; use platform-approved protected values,
+                never log bodies.
               properties:
-                key: {type: string}
-                operationId: {type: string}
-                version: {type: string}
-                interfaceId: {type: string}
-                actionHash: {type: string}
-                ssn: {type: string, maxLength: 2048}
-                iPin: {type: string, maxLength: 2048}
-                code: {type: string, maxLength: 2048}
-                usage: {type: string, maxLength: 2048}
-                content: {type: string, maxLength: 2048}
+                key:
+                  type: string
+                  pattern: ^[A-Za-z0-9._:-]{1,128}$
+                operationId:
+                  type: string
+                  pattern: ^[A-Za-z0-9._:-]{1,128}$
+                version:
+                  type: string
+                  pattern: ^[A-Za-z0-9._:-]{1,128}$
+                interfaceId:
+                  type: string
+                  pattern: ^[A-Za-z0-9._:-]{1,128}$
+                actionHash:
+                  type: string
+                  pattern: ^[A-Za-z0-9_-]{43}$
+                ssn:
+                  type: string
+                  maxLength: 2048
+                  minLength: 1
+                iPin:
+                  type: string
+                  maxLength: 2048
+                  minLength: 1
+                code:
+                  type: string
+                  maxLength: 2048
+                  minLength: 1
+                usage:
+                  type: string
+                  maxLength: 2048
+                  minLength: 1
+                content:
+                  type: string
+                  maxLength: 2048
+                  minLength: 1
+              anyOf:
+              - required:
+                - ssn
+              - required:
+                - iPin
       responses:
         '200':
           description: Stable authReqId, SDK input and expiration for the same key and input
@@ -40,12 +81,367 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [authReqId, sdkInput, expiresAt]
+                required:
+                - authReqId
+                - sdkInput
+                - expiresAt
                 properties:
-                  authReqId: {type: string}
-                  sdkInput: {type: string, description: Platform encrypted SDK input; local mock is not encryption}
-                  expiresAt: {type: integer, format: int64}
-        '409': {description: Same scoped key with different input}
+                  authReqId:
+                    type: string
+                  sdkInput:
+                    type: string
+                    description: Platform encrypted SDK input; local mock is not encryption
+                  expiresAt:
+                    type: integer
+                    format: int64
+        '409':
+          description: 같은 범위 key의 입력 충돌
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '400':
+          description: 입력 형식 오류
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 인증 문맥 형식 오류 등
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 서비스 토큰 불일치·권한·등록 만료 등
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: 의존 서비스 응답 오류
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: 플랫폼·세션 서비스 미설정/장애
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 예상하지 못한 오류
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      description: 별도 서비스 Bearer(GATEWAY_SERVICE_CREDENTIAL)와 GW가 발급한 X-Auth-Context 필요. 회원·채널·thread는 문맥에서
+        결정. 본문 key가 등록 멱등 키이며 Idempotency-Key 헤더는 이 API에 요구하지 않음.
+  /internal/v1/chat:
+    post:
+      summary: 'GW → B/E: 발화·인증 resume'
+      description: 서비스 인증을 검증하고 thread 소유권을 확인한다. query·본문은 원문 전달. B/E 오류 상태·본문은 Gateway가 그대로 전달. 실제 업무 payload는
+        FE/B/E 계약으로 확정.
+      servers:
+      - url: '{backendUrl}'
+        description: Agent B/E (채널별 URL)
+        variables:
+          backendUrl:
+            default: http://localhost:8000
+      parameters:
+      - $ref: '#/components/parameters/X-Authenticated-User-Id'
+      - $ref: '#/components/parameters/X-Authenticated-User-Type'
+      - $ref: '#/components/parameters/X-Authenticated-Channel-Id'
+      - $ref: '#/components/parameters/X-Authenticated-Guest-Id'
+      - $ref: '#/components/parameters/X-Auth-Context'
+      - $ref: '#/components/parameters/X-Verified-Auth-Requests'
+      - $ref: '#/components/parameters/X-Request-Id'
+      - $ref: '#/components/parameters/Idempotency-Key'
+      responses:
+        '200':
+          description: B/E 업무 응답. SSE는 매 이벤트 flush; 기본 30초 미만 heartbeat 필요.
+          content:
+            application/json:
+              schema: {}
+            text/event-stream:
+              schema:
+                type: string
+              example: 'event: message
+
+                data: {"text":"예시"}
+
+
+                '
+        default:
+          description: B/E의 HTTP 상태·본문 그대로 전달. SSE 시작 이후 HTTP 상태 변경 불가.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+  /internal/v1/chat/threads/{threadId}/tools/{tool}:
+    post:
+      summary: 'GW → B/E: 도구 실행'
+      description: 서비스 인증을 검증하고 thread 소유권을 확인한다. query·본문은 원문 전달. B/E 오류 상태·본문은 Gateway가 그대로 전달. 실제 업무 payload는
+        FE/B/E 계약으로 확정.
+      servers:
+      - url: '{backendUrl}'
+        description: Agent B/E (채널별 URL)
+        variables:
+          backendUrl:
+            default: http://localhost:8000
+      parameters:
+      - $ref: '#/components/parameters/X-Authenticated-User-Id'
+      - $ref: '#/components/parameters/X-Authenticated-User-Type'
+      - $ref: '#/components/parameters/X-Authenticated-Channel-Id'
+      - $ref: '#/components/parameters/X-Authenticated-Guest-Id'
+      - $ref: '#/components/parameters/X-Auth-Context'
+      - $ref: '#/components/parameters/X-Verified-Auth-Requests'
+      - $ref: '#/components/parameters/X-Request-Id'
+      - $ref: '#/components/parameters/Idempotency-Key'
+      - name: threadId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: tool
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: B/E 업무 응답. SSE는 매 이벤트 flush; 기본 30초 미만 heartbeat 필요.
+          content:
+            application/json:
+              schema: {}
+            text/event-stream:
+              schema:
+                type: string
+              example: 'event: message
+
+                data: {"text":"예시"}
+
+
+                '
+        default:
+          description: B/E의 HTTP 상태·본문 그대로 전달. SSE 시작 이후 HTTP 상태 변경 불가.
+      requestBody:
+        required: true
+        content:
+          '*/*':
+            schema:
+              type: string
+              format: binary
+  /internal/v1/chat/threads:
+    get:
+      summary: 'GW → B/E: 대화 목록'
+      description: 서비스 인증을 검증하고 thread 소유권을 확인한다. query·본문은 원문 전달. B/E 오류 상태·본문은 Gateway가 그대로 전달. 실제 업무 payload는
+        FE/B/E 계약으로 확정.
+      servers:
+      - url: '{backendUrl}'
+        description: Agent B/E (채널별 URL)
+        variables:
+          backendUrl:
+            default: http://localhost:8000
+      parameters:
+      - $ref: '#/components/parameters/X-Authenticated-User-Id'
+      - $ref: '#/components/parameters/X-Authenticated-User-Type'
+      - $ref: '#/components/parameters/X-Authenticated-Channel-Id'
+      - $ref: '#/components/parameters/X-Authenticated-Guest-Id'
+      - $ref: '#/components/parameters/X-Auth-Context'
+      - $ref: '#/components/parameters/X-Request-Id'
+      responses:
+        '200':
+          description: B/E 업무 응답. SSE는 매 이벤트 flush; 기본 30초 미만 heartbeat 필요.
+          content:
+            application/json:
+              schema: {}
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        default:
+          description: B/E의 HTTP 상태·본문 그대로 전달. SSE 시작 이후 HTTP 상태 변경 불가.
+  /internal/v1/chat/threads/{threadId}/messages:
+    get:
+      summary: 'GW → B/E: 대화 이력'
+      description: 서비스 인증을 검증하고 thread 소유권을 확인한다. query·본문은 원문 전달. B/E 오류 상태·본문은 Gateway가 그대로 전달. 실제 업무 payload는
+        FE/B/E 계약으로 확정.
+      servers:
+      - url: '{backendUrl}'
+        description: Agent B/E (채널별 URL)
+        variables:
+          backendUrl:
+            default: http://localhost:8000
+      parameters:
+      - $ref: '#/components/parameters/X-Authenticated-User-Id'
+      - $ref: '#/components/parameters/X-Authenticated-User-Type'
+      - $ref: '#/components/parameters/X-Authenticated-Channel-Id'
+      - $ref: '#/components/parameters/X-Authenticated-Guest-Id'
+      - $ref: '#/components/parameters/X-Auth-Context'
+      - $ref: '#/components/parameters/X-Request-Id'
+      - name: threadId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: B/E 업무 응답. SSE는 매 이벤트 flush; 기본 30초 미만 heartbeat 필요.
+          content:
+            application/json:
+              schema: {}
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        default:
+          description: B/E의 HTTP 상태·본문 그대로 전달. SSE 시작 이후 HTTP 상태 변경 불가.
+  /internal/v1/chat/threads/{threadId}/artifacts/{artifactId}:
+    get:
+      summary: 'GW → B/E: 아티팩트'
+      description: 서비스 인증을 검증하고 thread 소유권을 확인한다. query·본문은 원문 전달. B/E 오류 상태·본문은 Gateway가 그대로 전달. 실제 업무 payload는
+        FE/B/E 계약으로 확정.
+      servers:
+      - url: '{backendUrl}'
+        description: Agent B/E (채널별 URL)
+        variables:
+          backendUrl:
+            default: http://localhost:8000
+      parameters:
+      - $ref: '#/components/parameters/X-Authenticated-User-Id'
+      - $ref: '#/components/parameters/X-Authenticated-User-Type'
+      - $ref: '#/components/parameters/X-Authenticated-Channel-Id'
+      - $ref: '#/components/parameters/X-Authenticated-Guest-Id'
+      - $ref: '#/components/parameters/X-Auth-Context'
+      - $ref: '#/components/parameters/X-Request-Id'
+      - name: threadId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: artifactId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: B/E 업무 응답. SSE는 매 이벤트 flush; 기본 30초 미만 heartbeat 필요.
+          content:
+            application/json:
+              schema: {}
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        default:
+          description: B/E의 HTTP 상태·본문 그대로 전달. SSE 시작 이후 HTTP 상태 변경 불가.
 components:
   securitySchemes:
-    service: {type: http, scheme: bearer}
+    service:
+      type: http
+      scheme: bearer
+  schemas:
+    Error:
+      type: object
+      required:
+      - error
+      properties:
+        error:
+          type: object
+          required:
+          - code
+          - status
+          - message
+          properties:
+            code:
+              type: integer
+            status:
+              type: string
+            message:
+              type: string
+              example: ''
+            failedAuthReqIds:
+              type: array
+              items:
+                type: string
+    ChatRequest:
+      type: object
+      required:
+      - threadId
+      additionalProperties: true
+      description: 원문 JSON 최대 1MiB. threadId 외 업무 필드는 FE/B/E 합의. Gateway는 원문 전달.
+      properties:
+        threadId:
+          type: string
+          pattern: ^[A-Za-z0-9._:-]{1,128}$
+  parameters:
+    X-Authenticated-User-Id:
+      name: X-Authenticated-User-Id
+      in: header
+      required: true
+      description: 회원 PID 또는 게스트 식별자. 서비스 Bearer 검증 후 신뢰.
+      schema:
+        type: string
+    X-Authenticated-User-Type:
+      name: X-Authenticated-User-Type
+      in: header
+      required: true
+      description: MEMBER 또는 GUEST
+      schema:
+        type: string
+        enum:
+        - MEMBER
+        - GUEST
+    X-Authenticated-Channel-Id:
+      name: X-Authenticated-Channel-Id
+      in: header
+      required: true
+      description: 세션에서 검증된 채널
+      schema:
+        type: string
+    X-Authenticated-Guest-Id:
+      name: X-Authenticated-Guest-Id
+      in: header
+      required: false
+      description: 현재/로그인 이전 게스트 식별자. 처음부터 회원이면 생략
+      schema:
+        type: string
+    X-Auth-Context:
+      name: X-Auth-Context
+      in: header
+      required: false
+      description: 회원+thread 요청에 발급. 기본 10분. 등록 API 호출에 사용
+      schema:
+        type: string
+    X-Verified-Auth-Requests:
+      name: X-Verified-Auth-Requests
+      in: header
+      required: false
+      description: resume 검증 성공한 authReqId의 쉼표 목록. B/E는 업무에 필요한 전체 ID와 매핑 검사
+      schema:
+        type: string
+    X-Request-Id:
+      name: X-Request-Id
+      in: header
+      required: true
+      description: 추적 식별자. 인증 수단 아님
+      schema:
+        type: string
+    Idempotency-Key:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: POST 재전송 키. 실제 업무 실행 중복 방지는 B/E 책임
+      schema:
+        type: string
+servers:
+- url: '{gatewayUrl}'
+  description: B/E → Gateway
+  variables:
+    gatewayUrl:
+      default: http://localhost:8080

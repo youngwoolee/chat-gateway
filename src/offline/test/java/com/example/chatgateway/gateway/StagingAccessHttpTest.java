@@ -22,7 +22,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@ActiveProfiles("local")
+@ActiveProfiles("offline")
 class StagingAccessHttpTest {
   static final MockWebServer STAGE = new MockWebServer();
   static final MockWebServer PROD = new MockWebServer();
@@ -40,7 +40,7 @@ class StagingAccessHttpTest {
   static void properties(DynamicPropertyRegistry r) {
     r.add("chat.channels.allowed.stage", () -> "PFC");
     r.add("chat.staging.channels.stage", () -> STAGE.url("/").toString());
-    r.add("chat.staging.local-allowed-customers.stage[0]", () -> "local-member");
+    r.add("chat.offline.allowed-customers.stage[0]", () -> "local-member");
     r.add("chat.backend.base-url", () -> PROD.url("/").toString());
   }
 

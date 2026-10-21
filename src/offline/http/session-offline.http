@@ -1,6 +1,6 @@
-# 실행 전 HTTP Client 상단 환경 선택에서 local을 선택하세요. 변수는 http-client.env.json에 있습니다.
+# 실행 전 HTTP Client 상단 환경 선택에서 offline을 선택하세요. 변수는 http-client.env.json에 있습니다.
 # IntelliJ IDEA HTTP Client용. 요청 왼쪽 실행 버튼으로 순서대로 실행합니다.
-# 실행: ./gradlew bootRun --args='--spring.profiles.active=local'
+# 실행: ./gradlew bootRunOffline
 # 이 파일은 B/E·외부 세션 서비스 없이 실행 가능합니다. 기본 프로필은 세션 서비스 미연결로 503입니다.
 # 쿠키 jar 대신 명시적으로 Cookie를 전송하여 local HTTP에서도 Secure 쿠키를 테스트합니다.
 # 브라우저의 Secure/HttpOnly 동작을 완화하는 설정은 아닙니다.

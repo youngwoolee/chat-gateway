@@ -1,11 +1,11 @@
 # Agent API G/W 설계 — 세션 방식 핵심 요약
 
-2026-10-20 코드·FE 연동 문서 대조본. **[반영]은 이번 코드에 적용한 변경**입니다. G/W는 인증·중계, B/E는 대화·실제 업무를 담당합니다. 내부 API·신규 경로·기한은 아래 미확정 항목을 합의한 뒤 적용합니다.
+2026-10-21 최종 구현 대조본. **[반영]은 적용된 기능**입니다. G/W는 인증·중계, B/E는 대화·실제 업무를 담당합니다. 내부 API·신규 경로·기한은 아래 미확정 항목을 합의한 뒤 적용합니다.
 
 ## 1. 구조와 책임
 
 ```text
-FE → G/W(MVC + Tomcat + Spring Cloud Gateway) → Agent B/E → 대화·업무 처리
+FE → G/W(MVC + Tomcat + SseEmitter) → Agent B/E → 대화·업무 처리
         ├─ Eureka → agent-session-service → Redis / Hazelcast
         └─ PFC/MCI → 로그인·추가 인증·홈페이지 연동 쿠키
 ```
@@ -150,12 +150,12 @@ X-Mfa-Result: base64url(UTF-8 JSON 배열, padding 없음)
 
 | 구분 | 현재 상태 |
 |---|---|
-| 구현됨 | 세션 인증·원자 교체 계약, 신원 헤더, `_I` 자동 발급, 공식 MVC SSE 중계, Eureka 세션 클라이언트 |
-| **이번 변경 구현됨** | 복수 등록·key 멱등·대조값 보관, resume 헤더 검증·일괄 소비·실패 ID, Gateway 클릭 로그 기록·세션 threadId 저장·조회/activity 제거, 구 MFA API/콜백 제거 |
+| 구현됨 | 세션 인증·원자 교체 계약, 신원 헤더, `_I` 자동 발급, SseEmitter SSE 중계, Eureka 세션 클라이언트 |
+| **구현됨 (추가 인증·클릭)** | 복수 등록·key 멱등·대조값 보관, resume 헤더 검증·일괄 소비·실패 ID, Gateway 클릭 로그 기록·세션 threadId 저장·조회/activity 제거, 구 MFA API/콜백 제거 |
 | **계약 확인 필요** | FE의 /api/chat resume·base64url 형식 적용, 수단별 비소비 검증·실패 재시도, 등록/결과 기한, SDK 암호화 주민번호, 클릭 필드·로그 수집/보관 계약 |
-| 외부 연동 미완료 | 실제 PFC·SDK·B/E, 세션 서비스 API·원자성·Redis/Hazelcast 장애 전환. local/mock 테스트는 실제 외부 연동 검증을 의미하지 않음 |
+| 외부 연동 미완료 | 실제 PFC·SDK·B/E, 세션 서비스 API·원자성·Redis/Hazelcast 장애 전환. offline/mock 테스트는 실제 외부 연동 검증을 의미하지 않음 |
 
-피드백의 3개 변경을 **설계와 코드에 반영했습니다.** 운영 연동에는 세션 서비스의 복수 등록·SDK 입력 고정·resume 영수증·일괄 소비 원자 명령 구현이 필요합니다. local만 검증용 메모리·PFC mock을 제공하며 실제 SDK 암호화는 구현하지 않았습니다. 나머지 세션·대화 소유권·업무 실행 책임 분리는 유지합니다.
+피드백의 3개 변경을 **설계와 코드에 반영했습니다.** 운영 연동에는 세션 서비스의 복수 등록·SDK 입력 고정·resume 영수증·일괄 소비 원자 명령 구현이 필요합니다. offline만 검증용 메모리·PFC mock을 제공하며 실제 SDK 암호화는 구현하지 않았습니다. 나머지 세션·대화 소유권·업무 실행 책임 분리는 유지합니다.
 
 요청·응답 필드의 기계 판독 명세는 `docs/openapi/external-api.yaml`과 `docs/openapi/python-internal-api.yaml`을 사용합니다. 정책·책임·외부 연동 계약의 기준은 이 문서입니다.
 
@@ -188,7 +188,7 @@ X-Mfa-Result: base64url(UTF-8 JSON 배열, padding 없음)
 | 홈페이지 쿠키 | KMS 암호화 `(PID + yyyyMMddHHmm)`와 별도 MAC. 기존 시간 자르기 substring(0,11)·HEX 형식·타임존·키 설정은 플랫폼 확인 필요 |
 | 추가 인증 | CBA00003은 stateId/verifyCode/ticketId 목록 입력. 현재 authReqId/tranID/txId와의 매핑·비소비 검증 여부가 확인되지 않음 |
 
-현재 비local PFC는 계속503으로 차단하며 local만 mock을 사용한다. 실제 연결 완료를 의미하지 않는다. 사내 `ent.genesisframework:network-starter`, `crypto-starter`, 적용 버전/BOM·SDK·KMS 설정이 필요하다. 기존 템플릿은 responseCode를 읽고도 성공 여부를 판정하지 않으므로 정상/인증실패/시스템오류 코드를 확인해야 한다. 기존 코드의 키·MAC 디버그 출력과 예외 시 게스트 전환은 가져오지 않는다. 회원 PID는 승인된 클릭 AUDIT 필드에만 기록한다. 키/secret은 문서나 채팅에 전달하지 않고 운영 비밀 설정으로 주입해야 한다.
+현재 local/dev/prod의 PFC는 미구현 시503으로 차단하며 offline만 mock을 사용한다. 실제 연결 완료를 의미하지 않는다. 사내 `ent.genesisframework:network-starter`, `crypto-starter`, 적용 버전/BOM·SDK·KMS 설정이 필요하다. 기존 템플릿은 responseCode를 읽고도 성공 여부를 판정하지 않으므로 정상/인증실패/시스템오류 코드를 확인해야 한다. 기존 코드의 키·MAC 디버그 출력과 예외 시 게스트 전환은 가져오지 않는다. 회원 PID는 승인된 클릭 AUDIT 필드에만 기록한다. 키/secret은 문서나 채팅에 전달하지 않고 운영 비밀 설정으로 주입해야 한다.
 
 ## Staging 채널 접근 제한 (2026-10-21)
 
@@ -202,7 +202,7 @@ X-Mfa-Result: base64url(UTF-8 JSON 배열, padding 없음)
 | 검사 | 세션 생성·재사용·재시작 및 보호된 요청마다 확인. 캐시 만료 시 DB 재조회 |
 | 장애 | 유효 캐시는 만료까지 사용. 캐시 부재·만료 시 DB 오류는 503이며 허용으로 대체하지 않음 |
 | 목적지 | staging 채널은 설정된 staging B/E, 나머지는 기존 production B/E. 요청 채널이 세션과 다르면 거절 |
-| local | DB 없이 테스트 고객 목록 사용. 운영 DB와 실제 B/E 주소는 별도 주입 |
+| offline | DB 없이 테스트 고객 목록 사용. 운영 DB와 실제 B/E 주소는 별도 주입 |
 
 목록 삭제는 최대 캐시 TTL 후 새 요청부터 반영되며 이미 시작한 SSE는 끝까지 전달합니다. 관리자가 DB 원본과 channelId/customerId 고유 인덱스를 준비합니다.
 
@@ -239,7 +239,7 @@ GW가 호출하는 제안 계약이며 실제 서비스 연동 완료를 의미�
 
 소비 실패 시 어떤 항목도 변경하지 않는다. 만료·proof 충돌은403, 이미 다른 resume에서 소비되었으면409. 최초 영수증 expiresAt은 모든 등록·Proof 기한 중 최솟값이다. 검증 기한 상한(기본2분)은 서비스도 정책으로 검증해야 한다. 로그아웃/만료를 이유로 사용 이력을 먼저 지워 재사용을 허용하면 안 된다. 등록·proof·영수증의 보존 기간 및 개인정보 정리 정책은 서비스 운영 계약에서 확정한다.
 
-Redis/Hazelcast 장애 전환·다중 인스턴스 중에도 같은 원자성·최신 상태를 보장해야 한다. 확정 불가 시503을 반환한다. Gateway의 local synchronized 테스트가 실제 분산 원자성을 검증하지는 않는다.
+Redis/Hazelcast 장애 전환·다중 인스턴스 중에도 같은 원자성·최신 상태를 보장해야 한다. 확정 불가 시503을 반환한다. Gateway의 offline synchronized 테스트가 실제 분산 원자성을 검증하지는 않는다.
 
 ### restart-session
 
@@ -257,3 +257,31 @@ HTTP 상태와 error.code는 같아야 합니다. 401 UNAUTHENTICATED, 403 PERMI
 - staging: `chat.staging.channels`에 채널별 B/E URL, `chat.staging.mongo-uri`와 `database`로 DB 연결. `channel_customer_access` 컬렉션에 channelId/customerId/enabled 저장, channelId+customerId 고유 인덱스 필요. GW는 조회만 하며 목록 관리 API는 없습니다.
 - 클릭: 수집기용 최상위 `@timestamp/level/thread_name/logger_name/message` 구조. `buttonInfo`는 선택 객체, 알려진 5개 필드는 문자열/null이며 미정의 필드는 기록하지 않습니다. `sessionId=threadId`는 과거 인증 세션키와 의미가 다르므로 수집 분석 계약을 확인합니다. 자동 버튼 개인정보 마스킹은 보장하지 않습니다.
 - 로그 큐: 8192건, INFO 자동 폐기 없이 포화 시 대기. 200은 큐 등록/로그 호출 성공이며 디스크 영구 저장·수집 완료를 보장하지 않습니다.
+
+## MVC Controller / SseEmitter 전송 구조
+
+Spring Cloud Gateway 중계 의존성과 전용 필터·라우트·ProxyExchange 설정을 제거했습니다. Eureka·LoadBalancer는 세션/자동완성 서비스 탐색을 위해 유지합니다.
+
+| 코드 | 책임 |
+|---|---|
+| `ChatController` | 발화·도구 POST, 이력·아티팩트 GET 경로 |
+| `ChatService` | chat/tool/history 메서드로 발화·도구·조회 구분. 인증 후 B/E 호출, 조회는 일반 HTTP 응답 |
+| `ChatAuthenticationService` | 기존 세션·staging 권한·로그인 전환·MFA 검증 흐름 |
+| `AgentBackendClient` / `BackendHeaders` | RestClient의 chat(POST)·executeTool(POST)·history(GET)로 호출. 클라이언트는 서블릿 요청 대신 URI·검증된 헤더·본문을 받음. 채널별 목적지와 원문 query/body 유지 |
+| `SseRelayService` | MVC가 SseEmitter를 초기화한 뒤 가상 스레드로 B/E를 읽어 전달. 완료·단절·오류에서 연결과 슬롯 반환 |
+| `UpstreamClients` | B/E 연결 풀·읽기 제한·자동 retry/redirect 차단 및 미소비 응답 취소 |
+
+발화·도구 응답의 B/E Content-Type이 text/event-stream이면 SseEmitter, 그 외는 상태·헤더·본문을 일반 HTTP 응답으로 전달합니다. SSE는 이미 구성된 이벤트 바이트를 전달하므로 data/event/id/retry/주석/여러 줄·UTF-8을 재작성하지 않습니다. 표준 `send(Set<DataWithMediaType>)`를 사용하며 `send(Object)`로 data:를 중복 추가하지 않습니다.
+SSE 전체 수명은 무제한이고 B/E 읽기 간격 제한(기본 30초)을 적용합니다. 첫 데이터 전에도 헤더를 전송하며, 스트림 시작 후 오류에 JSON을 끼워 넣지 않습니다. GET 조건부 캐시 응답 및 공개 경로의 기존 상태 계약은 유지합니다.
+
+## 9. 공유 문서와 내부망 전환
+
+| 대상 | 전달 자료 |
+|---|---|
+| FE | `output/pdf/gateway-api-guide.pdf`, `docs/openapi/external-api.yaml` |
+| Agent B/E | `docs/backend-integration-spec.md`, `output/pdf/backend-integration-spec.pdf`, `docs/openapi/python-internal-api.yaml` |
+| 유지보수 | `output/handover/chatbot-gateway-handover.md` 및 PDF |
+
+API 명세는 1.0.0으로 정리했습니다. B/E 명세는 양방향 서버·서비스 Bearer·신원 헤더·SSE·MFA 등록/재개를 포함합니다. 업무 payload와 SSE 업무 이벤트는 FE/B/E 합의 대상입니다.
+
+offline 임시 구현·설정·의존 테스트·호출 예제는 src/offline에 격리하며 기본 배포 JAR에서 제외합니다. 외부망 실행은 ./gradlew bootRunOffline, 검증은 ./gradlew check입니다. local/dev/prod는 실제 Eureka 세션 서비스·Document DB를 사용하고 PFC 미구현이면 503입니다. EUREKA_URL·BACKEND_BASE_URL·토큰·허용 채널·DB 설정을 환경별로 주입합니다. offline과 내부망 프로필은 함께 활성화할 수 없습니다. 외부망 작업 종료 시 src/offline 및 Gradle의 외부망 블록을 제거하면 됩니다. 문서 UI는 local·offline에서만 제공합니다.

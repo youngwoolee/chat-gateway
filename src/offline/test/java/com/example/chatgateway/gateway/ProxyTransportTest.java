@@ -36,7 +36,7 @@ import org.springframework.test.context.DynamicPropertySource;
       "chat.backend.response-timeout=700ms",
       "server.tomcat.connection-timeout=700ms"
     })
-@ActiveProfiles("local")
+@ActiveProfiles("offline")
 class ProxyTransportTest {
   static final String CHANNEL = "00000000-0000-0000-0000-000000000001";
   static final MockWebServer BACKEND = new MockWebServer();
@@ -247,8 +247,9 @@ class ProxyTransportTest {
     assertThat(virtual.get(2, TimeUnit.SECONDS)).isTrue();
   }
 
-  @Test
-  void rawSseAndFirstChunkArriveBeforeEof() throws Exception {
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+  void rawSseAndFirstChunkArriveBeforeEof(boolean postRequest) throws Exception {
     byte[] body =
         ": 주석\r\nid: 42\r\nretry: 50\ndata:  two spaces\ndata: 한글\n\nevent: unknown\ndata:\n\n"
             .getBytes(StandardCharsets.UTF_8);
@@ -257,8 +258,9 @@ class ProxyTransportTest {
             .setHeader("Content-Type", "text/event-stream")
             .setChunkedBody(new Buffer().write(body), 7)
             .throttleBody(7, 50, TimeUnit.MILLISECONDS));
+    var request = postRequest ? post("/api/chat").bodyValue("{\"threadId\":\"thread\"}") : chat();
     var response =
-        chat().exchange().expectStatus().isOk().expectHeader().exists("X-Chat-Auth-Expires-At");
+        request.exchange().expectStatus().isOk().expectHeader().exists("X-Chat-Auth-Expires-At");
     try (var input = response.response.body()) {
       long begin = System.nanoTime();
       assertThat(input.readNBytes(7)).isEqualTo(java.util.Arrays.copyOf(body, 7));
@@ -489,6 +491,19 @@ class ProxyTransportTest {
             .setBody(new Buffer().write(zipped.toByteArray())));
     assertThat(chat().exchange().expectStatus().isOk().getResponseBody())
         .isEqualTo(zipped.toByteArray());
+  }
+
+  @Test
+  void emitterPreservesCommentsIdsRetryMultilineAndUtf8AcrossChunks() throws Exception {
+    String events =
+        ": heartbeat\r\n\r\nid: 42\r\nevent: answer\r\nretry: 1500\r\n"
+            + "data: 첫 번째 줄\r\ndata: 두 번째 줄\r\n\r\n";
+    BACKEND.enqueue(
+        new MockResponse()
+            .setHeader("Content-Type", "text/event-stream;charset=UTF-8")
+            .setChunkedBody(events, 1));
+    assertThat(chat().exchange().expectStatus().isOk().getResponseBody())
+        .isEqualTo(events.getBytes(StandardCharsets.UTF_8));
   }
 
   @Test

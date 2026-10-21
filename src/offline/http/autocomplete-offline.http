@@ -1,4 +1,4 @@
-# local 환경 선택 후 session-local.http에서 세션을 생성하세요.
+# offline 환경 선택 후 session-offline.http에서 세션을 생성하세요.
 # 자동완성 mock은 AUTOCOMPLETE_BASE_URL(기본 localhost:8001)에 실행합니다.
 ### 자동완성 (키 없이 조회, 세션 연장 없음)
 # @no-cookie-jar

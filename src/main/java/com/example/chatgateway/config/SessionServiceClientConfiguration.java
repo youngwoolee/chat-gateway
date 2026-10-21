@@ -20,7 +20,7 @@ import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
 @Configuration
-@Profile("!local")
+@Profile("!offline")
 @EnableConfigurationProperties(SessionServiceProperties.class)
 public class SessionServiceClientConfiguration {
   /** SSE 풀과 분리하고 재시도·redirect·쿠키 공유를 금지한다. */

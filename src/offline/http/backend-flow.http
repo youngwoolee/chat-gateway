@@ -1,8 +1,8 @@
-# 실행 전 HTTP Client 상단 환경 선택에서 local을 선택하세요. 변수는 http-client.env.json에 있습니다.
-# 사전 준비: session-local.http 1~3 실행.
+# 실행 전 HTTP Client 상단 환경 선택에서 offline을 선택하세요. 변수는 http-client.env.json에 있습니다.
+# 사전 준비: session-offline.http 1~3 실행.
 # B/E 실행 필요: 기본 http://127.0.0.1:8000 (PYTHON_BASE_URL로 변경 가능).
 # B/E 계약은 docs/agent-api-gw-session-summary.md 참고. B/E 미실행 시 채팅/MFA 전달은 실패합니다.
-# 1번 채팅에서 B/E가 수신한 X-Auth-Context를 http-client.env.json의 local.authContext에 복사하세요.
+# 1번 채팅에서 B/E가 수신한 X-Auth-Context를 http-client.env.json의 offline.authContext에 복사하세요.
 # Gateway의 응답 헤더에는 이 값이 없습니다. 프론트에 공개하는 코드를 추가하지 마세요.
 # 5분 세션·10분 인증 등록·검증 결과 2분 기한 내 단계별 실행. Run All 사용하지 마세요.
 # 새 대화는 새 threadId를 POST /api/auth/session/restart body로 전달하세요. 업무마다 operationId를 바꾸세요.
@@ -25,7 +25,7 @@ GET {{baseUrl}}/api/chat/threads/{{threadId}}/messages
 Cookie: __Host-sh-session={{shSession}}
 
 ### 3. B/E 역할: 업무별 인증 등록 (같은 key는 같은 authReqId)
-# 다른 인증도 필요하면 key를 바꿔 추가 등록합니다. 아래 고객값은 local 전용 합성값입니다.
+# 다른 인증도 필요하면 key를 바꿔 추가 등록합니다. 아래 고객값은 offline 전용 합성값입니다.
 # @no-cookie-jar
 POST {{baseUrl}}/internal/v1/auth/operations
 Authorization: Bearer {{internalCredential}}
@@ -55,7 +55,7 @@ Content-Type: application/json
 ### 5. 프론트 resume: 인증 결과 검증 후 SSE (B/E 필요)
 # mfaResult는 아래 JSON을 UTF-8/base64url(no padding)로 인코딩한 값입니다.
 # [{"authReqId":"<3번 응답>","tranID":"local:<3번 응답>","method":"SHINHAN"}]
-# local 예제 생성: python3 http/encode-local-mfa.py ar_... [ar_...]
+# local 예제 생성: python3 src/offline/http/encode-offline-mfa.py ar_... [ar_...]
 # 출력값을 http-client.env.json의 mfaResult에 입력하세요. 실제 인증 원문은 저장하지 마세요.
 # 동일 요청 재시도는 동일 키·본문·결과 목록 유지. B/E는 동일 키 업무를 재실행하지 않아야 합니다.
 # @no-cookie-jar

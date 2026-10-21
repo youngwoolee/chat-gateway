@@ -12,7 +12,7 @@ import java.time.Clock;
 import java.util.List;
 import org.springframework.stereotype.Service;
 
-/** 중계 전에 세션 인증·MFA 검증·인증 문맥 생성을 완료한다. 전송 자원은 필터가 관리한다. */
+/** 중계 전에 세션 인증·MFA 검증·인증 문맥 생성을 완료한다. 전송 연결은 호출 서비스가 관리한다. */
 @Service
 public class ChatAuthenticationService {
   private final SessionAuthentication auth;

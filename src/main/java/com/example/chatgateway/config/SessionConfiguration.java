@@ -1,11 +1,8 @@
 package com.example.chatgateway.config;
 
-import com.example.chatgateway.client.pfc.MockPfcClient;
 import com.example.chatgateway.client.pfc.PfcClient;
 import com.example.chatgateway.exception.GatewayException;
 import com.example.chatgateway.session.AuthRequest;
-import com.example.chatgateway.session.AuthorityStore;
-import com.example.chatgateway.session.LocalAuthorityStore;
 import java.time.Clock;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -13,7 +10,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
 
-/** local mock과 운영 연동 경계를 프로필로 분리한다. 운영 연동이 없으면 인증을 허용하지 않는 구현을 등록한다. */
+/** 실제 서비스 연동의 공통 설정. 운영 연동이 없으면 인증을 허용하지 않는 구현을 등록한다. */
 @Configuration
 @EnableConfigurationProperties({SessionSettings.class, MfaProperties.class})
 public class SessionConfiguration {
@@ -23,23 +20,9 @@ public class SessionConfiguration {
     return Clock.systemUTC();
   }
 
-  /** local 프로필에서만 단일 프로세스 메모리 저장소를 등록한다. 운영 영속성·다중 인스턴스 보장은 제공하지 않는다. */
-  @Bean
-  @Profile("local")
-  AuthorityStore localAuthority() {
-    return new LocalAuthorityStore();
-  }
-
-  /** local 프로필에서만 고정 테스트 티켓과 MFA tx를 처리하는 플랫폼 mock을 등록한다. */
-  @Bean
-  @Profile("local")
-  PfcClient localPlatform(Clock clock) {
-    return new MockPfcClient(clock);
-  }
-
   /** 운영 플랫폼 구현이 없으면 인증·쿠키 발급을 성공으로 가정하지 않고 503으로 차단한다. */
   @Bean
-  @Profile("!local")
+  @Profile("!offline")
   @ConditionalOnMissingBean(PfcClient.class)
   PfcClient unavailablePlatform() {
     return new PfcClient() {

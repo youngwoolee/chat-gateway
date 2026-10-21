@@ -6,7 +6,6 @@ import com.mongodb.ConnectionString;
 import com.mongodb.MongoClientSettings;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
-import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import org.bson.Document;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -16,20 +15,12 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
 
-/** Mongo 호환 Document DB와 로컬 테스트 목록을 분리한다. */
+/** 실제 환경의 Mongo 호환 Document DB 권한 저장소. */
 @Configuration
 @EnableConfigurationProperties(StagingProperties.class)
 public class ChannelAccessConfiguration {
-  /** 로컬 테스트에서는 DB 없이 설정의 합성 고객번호 목록만 조회한다. */
-  @Bean
-  @Profile("local")
-  ChannelAccessRepository localChannelAccess(StagingProperties settings) {
-    return (channel, customer) ->
-        settings.localAllowedCustomers().getOrDefault(channel, Set.of()).contains(customer);
-  }
-
   @Configuration
-  @Profile("!local")
+  @Profile("!offline")
   @ConditionalOnProperty(prefix = "chat.staging", name = "mongo-uri")
   static class DocumentDb {
     /** 연결·조회 대기시간을 제한하며 애플리케이션 종료 시 연결 풀을 닫는다. */
@@ -64,7 +55,7 @@ public class ChannelAccessConfiguration {
 
   /** DB 미설정 상태에서는 staging 권한을 임의로 허용하지 않는다. */
   @Bean
-  @Profile("!local")
+  @Profile("!offline")
   @ConditionalOnMissingBean(ChannelAccessRepository.class)
   ChannelAccessRepository unavailableChannelAccess() {
     return (channel, customer) -> {

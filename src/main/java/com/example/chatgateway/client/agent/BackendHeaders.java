@@ -1,21 +1,19 @@
-package com.example.chatgateway.gateway;
+package com.example.chatgateway.client.agent;
 
 import com.example.chatgateway.config.SessionSettings;
-import com.example.chatgateway.session.Session;
+import com.example.chatgateway.gateway.RequestIdFilter;
+import com.example.chatgateway.service.ChatAuthenticationService.AuthenticatedChat;
+import jakarta.servlet.http.HttpServletRequest;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.Locale;
 import java.util.Set;
-import org.springframework.cloud.gateway.server.mvc.filter.HttpHeadersFilter.RequestHttpHeadersFilter;
-import org.springframework.cloud.gateway.server.mvc.filter.HttpHeadersFilter.ResponseHttpHeadersFilter;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.core.Ordered;
-import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpHeaders;
+import org.springframework.stereotype.Component;
 
-/** 공식 Gateway 헤더 필터 확장점에서 서비스 신뢰 경계만 적용한다. */
-@Configuration
-public class GatewayHeaders {
+/** HTTP 중계의 신원·연결 헤더 경계를 관리한다. */
+@Component
+public class BackendHeaders {
   private static final Set<String> HOP =
       Set.of(
           "connection",
@@ -27,33 +25,35 @@ public class GatewayHeaders {
           "transfer-encoding",
           "upgrade");
 
-  /** 클라이언트 신원을 지운 뒤 인증 필터가 확정한 신원으로 교체한다. */
-  @Bean
-  @Order(Ordered.HIGHEST_PRECEDENCE)
-  RequestHttpHeadersFilter authenticatedHeaders(SessionSettings settings) {
-    return (input, request) -> {
-      var headers = clean(input, true);
-      var session = (Session) request.servletRequest().getAttribute(ChatGatewayFilter.SESSION);
-      headers.set("Authorization", "Bearer " + settings.backendCredential());
-      headers.set("X-Authenticated-User-Id", session.subject());
-      headers.set("X-Authenticated-User-Type", session.userType());
-      headers.set("X-Authenticated-Channel-Id", session.channel());
-      String guest = session.member() ? session.guestSubject() : session.subject();
-      if (guest != null) headers.set("X-Authenticated-Guest-Id", guest);
-      String context = (String) request.servletRequest().getAttribute(ChatGatewayFilter.CONTEXT);
-      if (context != null) headers.set("X-Auth-Context", context);
-      String verified = (String) request.servletRequest().getAttribute(ChatGatewayFilter.VERIFIED);
-      if (verified != null) headers.set("X-Verified-Auth-Requests", verified);
-      headers.set("X-Request-Id", RequestIdFilter.id(request.servletRequest()));
-      return headers;
-    };
+  private final SessionSettings settings;
+
+  public BackendHeaders(SessionSettings settings) {
+    this.settings = settings;
   }
 
-  /** B/E가 연결 전용 헤더와 Gateway 인증 시각을 주입하지 못하게 한다. */
-  @Bean
-  @Order(Ordered.HIGHEST_PRECEDENCE)
-  ResponseHttpHeadersFilter responseHeaders() {
-    return (headers, response) -> clean(headers, false);
+  /** 외부 신원 주장을 제거하고 인증 서비스가 확정한 신원만 전달한다. */
+  public HttpHeaders request(HttpServletRequest request, AuthenticatedChat authenticated) {
+    var input = new HttpHeaders();
+    Collections.list(request.getHeaderNames())
+        .forEach(name -> input.put(name, Collections.list(request.getHeaders(name))));
+    var headers = clean(input, true);
+    var session = authenticated.session();
+    headers.set("Authorization", "Bearer " + settings.backendCredential());
+    headers.set("X-Authenticated-User-Id", session.subject());
+    headers.set("X-Authenticated-User-Type", session.userType());
+    headers.set("X-Authenticated-Channel-Id", session.channel());
+    String guest = session.member() ? session.guestSubject() : session.subject();
+    if (guest != null) headers.set("X-Authenticated-Guest-Id", guest);
+    if (authenticated.context() != null) headers.set("X-Auth-Context", authenticated.context());
+    if (!authenticated.verifiedAuthIds().isEmpty())
+      headers.set("X-Verified-Auth-Requests", String.join(", ", authenticated.verifiedAuthIds()));
+    headers.set("X-Request-Id", RequestIdFilter.id(request));
+    return headers;
+  }
+
+  /** 연결 전용 헤더와 B/E가 보낸 인증 만료 헤더를 제거한다. */
+  public HttpHeaders response(HttpHeaders input) {
+    return clean(input, false);
   }
 
   private HttpHeaders clean(HttpHeaders input, boolean request) {

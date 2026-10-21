@@ -24,7 +24,7 @@ import org.springframework.test.context.DynamicPropertySource;
 @SpringBootTest(
     webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
     properties = "spring.cloud.loadbalancer.cache.enabled=false")
-@ActiveProfiles("local")
+@ActiveProfiles("offline")
 class AutocompleteHttpIntegrationTest {
   static final MockWebServer SEARCH = new MockWebServer();
 

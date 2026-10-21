@@ -14,6 +14,7 @@ import java.util.Map;
 import org.springframework.boot.web.servlet.error.ErrorController;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.ErrorResponse;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -34,6 +35,10 @@ public class GatewayErrorHandler implements ErrorController {
   @ExceptionHandler(Exception.class)
   public void handleRequest(
       HttpServletRequest request, HttpServletResponse response, Exception error) throws Exception {
+    if (error instanceof HttpRequestMethodNotSupportedException
+        && (request.getRequestURI().equals("/api/chat")
+            || request.getRequestURI().startsWith("/api/chat/")))
+      error = new GatewayException(404, "NOT_FOUND");
     handle(response, error, request.getRequestURI().startsWith("/api/"));
   }
 

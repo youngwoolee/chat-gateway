@@ -32,7 +32,7 @@ import org.springframework.test.context.DynamicPropertySource;
       "chat.backend.response-timeout=2s",
       "server.tomcat.connection-timeout=700ms"
     })
-@ActiveProfiles("local")
+@ActiveProfiles("offline")
 class ProxyDisconnectTest {
   static final ServerSocket BACKEND;
 

@@ -7,7 +7,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 
-/** Explicit local fixture. Never registered outside the local profile. */
+/** Explicit local fixture. Registered only with the offline profile. */
 public final class MockPfcClient implements PfcClient {
   private final Clock clock;
   private final Map<String, String> consumed = new HashMap<>();

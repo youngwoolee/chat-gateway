@@ -1,8 +1,8 @@
 openapi: 3.0.3
 info:
   title: Chat Gateway Session API
-  version: 0.5.0
-  description: HttpOnly session cookie. Same-origin POST and Idempotency-Key required. See ../agent-api-gw-session-summary.md.
+  version: 1.0.0
+  description: HttpOnly session cookie. Same-origin POST; Idempotency-Key required except autocomplete. See ../agent-api-gw-session-summary.md.
 security:
   - sessionCookie: []
 paths:

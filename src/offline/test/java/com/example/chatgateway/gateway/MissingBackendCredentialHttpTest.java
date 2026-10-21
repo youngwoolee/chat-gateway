@@ -19,7 +19,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 @SpringBootTest(
     webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
     properties = "chat.session.backend-credential= ")
-@ActiveProfiles("local")
+@ActiveProfiles("offline")
 class MissingBackendCredentialHttpTest {
   @LocalServerPort int port;
   @Autowired AuthorityStore store;

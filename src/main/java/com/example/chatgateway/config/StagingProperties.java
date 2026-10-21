@@ -3,7 +3,6 @@ package com.example.chatgateway.config;
 import java.net.URI;
 import java.time.Duration;
 import java.util.Map;
-import java.util.Set;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 
@@ -14,12 +13,9 @@ public record StagingProperties(
     @DefaultValue("1m") Duration cacheTtl,
     @DefaultValue("10000") int cacheSize,
     @DefaultValue("") String mongoUri,
-    @DefaultValue("chat_gateway") String database,
-    @DefaultValue Map<String, Set<String>> localAllowedCustomers) {
+    @DefaultValue("chat_gateway") String database) {
   public StagingProperties {
     channels = channels == null ? Map.of() : Map.copyOf(channels);
-    localAllowedCustomers =
-        localAllowedCustomers == null ? Map.of() : Map.copyOf(localAllowedCustomers);
     if (cacheTtl.isNegative() || cacheTtl.isZero() || cacheSize < 1)
       throw new IllegalArgumentException("Staging cache limits must be positive");
     channels

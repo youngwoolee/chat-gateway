@@ -40,7 +40,7 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@ActiveProfiles("local")
+@ActiveProfiles("offline")
 class SessionHttpIntegrationTest {
   static final String CHANNEL = "00000000-0000-0000-0000-000000000001";
   static final MockWebServer BACKEND = new MockWebServer();

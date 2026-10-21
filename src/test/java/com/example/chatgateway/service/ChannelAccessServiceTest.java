@@ -18,8 +18,7 @@ class ChannelAccessServiceTest {
 
   ChannelAccessService service(Duration ttl) {
     return new ChannelAccessService(
-        new StagingProperties(
-            Map.of("stage", "http://localhost:8002"), ttl, 100, "", "test", Map.of()),
+        new StagingProperties(Map.of("stage", "http://localhost:8002"), ttl, 100, "", "test"),
         repository);
   }
 
