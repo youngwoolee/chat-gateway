@@ -1,0 +1,51 @@
+openapi: 3.0.3
+info:
+  title: Proposed B/E to Gateway authentication registration
+  version: 0.3.0
+  description: Multiple registrations per operation; resume proof forwarding replaces the old callback. See ../agent-api-gw-session-summary.md.
+security:
+  - service: []
+paths:
+  /internal/v1/auth/operations:
+    post:
+      summary: Register an authentication request idempotently within member/channel/thread/operation/key
+      parameters:
+        - name: X-Auth-Context
+          in: header
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key, operationId, version, interfaceId, actionHash, code, usage, content]
+              description: At least one of ssn or iPin is required; use platform-approved protected values, never log bodies.
+              properties:
+                key: {type: string}
+                operationId: {type: string}
+                version: {type: string}
+                interfaceId: {type: string}
+                actionHash: {type: string}
+                ssn: {type: string, maxLength: 2048}
+                iPin: {type: string, maxLength: 2048}
+                code: {type: string, maxLength: 2048}
+                usage: {type: string, maxLength: 2048}
+                content: {type: string, maxLength: 2048}
+      responses:
+        '200':
+          description: Stable authReqId, SDK input and expiration for the same key and input
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [authReqId, sdkInput, expiresAt]
+                properties:
+                  authReqId: {type: string}
+                  sdkInput: {type: string, description: Platform encrypted SDK input; local mock is not encryption}
+                  expiresAt: {type: integer, format: int64}
+        '409': {description: Same scoped key with different input}
+components:
+  securitySchemes:
+    service: {type: http, scheme: bearer}

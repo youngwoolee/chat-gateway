@@ -1,0 +1,16 @@
+.gradle/
+build/
+.idea/
+*.iml
+*.pem
+*.key
+.env
+
+# PDF 렌더링 검토용 중간 파일
+tmp/pdfs/
+
+# 로컬 감사 로그
+logs/
+
+# 개인 HTTP Client 환경 설정
+http-client.private.env.json

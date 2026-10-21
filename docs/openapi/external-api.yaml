@@ -1,0 +1,265 @@
+openapi: 3.0.3
+info:
+  title: Chat Gateway Session API
+  version: 0.5.0
+  description: HttpOnly session cookie. Same-origin POST and Idempotency-Key required. See ../agent-api-gw-session-summary.md.
+security:
+  - sessionCookie: []
+paths:
+  /api/auth/session:
+    post:
+      summary: 세션 생성·재사용 (기존 게스트 회원 전환 없음)
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Channel'
+        - name: threadId
+          in: query
+          description: FE conversation ID. Omitted on creation generates a new UUID; reuse keeps the stored ID.
+          schema: {type: string}
+        - $ref: '#/components/parameters/Key'
+      responses:
+        '200':
+          description: Session established; SID on creation or identity change, platform _I on member POST
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        default:
+          $ref: '#/components/responses/Error'
+  /api/auth/session/restart:
+    post:
+      summary: 유효한 회원 인증을 유지하며 새 대화로 전환
+      description: Atomically replaces a valid session and thread without _O or PFC. Members retain identity; guests get a fresh identity. No MFA or guestSubject inheritance. Same key and thread retry with old/new cookie returns the same active successor without extending expiry. Missing/expired/revoked session is 401 except a recorded restart retry to its active successor. No _I issued.
+      parameters:
+        - $ref: '#/components/parameters/Key'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [threadId]
+              properties:
+                threadId: {type: string, pattern: '^[A-Za-z0-9._:-]{1,128}$'}
+            example: {threadId: 'new-thread-1'}
+      responses:
+        '200':
+          description: New session cookie and session timing; same result on retry
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Session'}
+        default: {$ref: '#/components/responses/Error'}
+  /api/chat/auto:
+    post:
+      summary: 자동완성 조회 (기존 챗봇 요청·응답 호환)
+      description: Valid guest/member session required. No session extension, Idempotency-Key, PFC calls or auth-context issuance. Eureka search-autocomplete-service POST /api/autocomplete/chat. Search service failure becomes 503. Highlight is service data; FE must sanitize before HTML rendering.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [queryText]
+              properties:
+                queryText: {type: string, minLength: 1}
+                size: {type: integer, minimum: 1, maximum: 1000, default: 10}
+                channel: {type: string, minLength: 1, default: sol-chat}
+      responses:
+        '200':
+          description: Legacy success envelope; search data fields preserved
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [code, message, data]
+                properties:
+                  code: {type: string, enum: [SUCCESS]}
+                  message: {type: string, example: 성공}
+                  data:
+                    type: object
+                    required: [totalCount, chatResponse]
+                    properties:
+                      totalCount: {type: integer, minimum: 0}
+                      chatResponse:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            highlight: {type: string}
+                            score: {type: number}
+                            auto_result: {type: string}
+                            weight: {type: integer}
+                            boost: {type: string}
+                            nori_result: {type: string}
+                            ngram_result: {type: string}
+        default: {$ref: '#/components/responses/Error'}
+  /api/chat:
+    post:
+      summary: 채팅·SSE 및 추가 인증 resume 중계
+      description: X-Mfa-Result is a single unpadded base64url UTF-8 JSON array. Items contain authReqId, tranID, method and optional txId. Default maximum 8 items and 4096 encoded ASCII bytes. All items validate before atomic consumption and SSE.
+      parameters:
+        - name: X-Requested-Login
+          in: header
+          required: false
+          description: Only true requests guest-to-member promotion using PFC-validated _O cookies. Omitted/false keeps guest identity. Missing/invalid _O fails without forwarding. Existing members reuse authentication. Duplicate or invalid values return 400.
+          schema: {type: string, enum: ['true', 'false']}
+        - $ref: '#/components/parameters/Key'
+        - name: X-Mfa-Result
+          in: header
+          required: false
+          schema: {type: string, maxLength: 4096}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [threadId]
+              properties:
+                threadId: {type: string}
+              additionalProperties: true
+      responses:
+        '200':
+          description: B/E SSE; expiration headers available before streaming
+          content:
+            text/event-stream:
+              schema: {type: string}
+        default:
+          $ref: '#/components/responses/Error'
+  /api/chat/threads:
+    get:
+      summary: 대화 목록 조회
+      responses:
+        '200': {description: B/E response unchanged}
+        default: {$ref: '#/components/responses/Error'}
+  /api/chat/threads/{tid}/messages:
+    parameters:
+      - $ref: '#/components/parameters/Thread'
+    get:
+      summary: 대화 메시지 조회
+      responses:
+        '200': {description: B/E response unchanged}
+        default: {$ref: '#/components/responses/Error'}
+  /api/chat/threads/{tid}/artifacts/{aid}:
+    parameters:
+      - $ref: '#/components/parameters/Thread'
+      - name: aid
+        in: path
+        required: true
+        schema: {type: string}
+    get:
+      summary: 대화 첨부 결과 조회
+      responses:
+        '200': {description: B/E response unchanged}
+        default: {$ref: '#/components/responses/Error'}
+  /api/chat/threads/{tid}/tools/{tool}:
+    parameters:
+      - $ref: '#/components/parameters/Thread'
+      - name: tool
+        in: path
+        required: true
+        schema: {type: string}
+    post:
+      summary: 대화 도구 요청 중계
+      parameters:
+        - $ref: '#/components/parameters/Key'
+      responses:
+        '200': {description: B/E response unchanged}
+        default: {$ref: '#/components/responses/Error'}
+  /api/click:
+    post:
+      summary: Gateway 클릭 로그 기록 및 세션 연장
+      description: Gateway logs validated fields as JSON without calling B/E. Additional fields are ignored. Retries do not extend the session again but may produce duplicate logs; identify by channelId/threadId/key. 200 does not guarantee durable log ingestion.
+      parameters:
+        - $ref: '#/components/parameters/Key'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [threadId, scenarioId, state, component]
+              properties:
+                threadId: {type: string}
+                scenarioId: {type: string, minLength: 1}
+                state: {type: string, minLength: 1}
+                component:
+                  oneOf:
+                    - {type: string, minLength: 1}
+                    - {type: object, additionalProperties: true}
+                buttonInfo:
+                  type: object
+                  nullable: true
+                  description: 기존 로그 수집기용 선택 버튼 정보. 정의된 문자열 필드만 기록하며 고객 입력·민감정보를 보내지 않는다.
+                  properties:
+                    buttonType: {type: string, nullable: true}
+                    buttonNm: {type: string, nullable: true}
+                    buttonUrl: {type: string, nullable: true}
+                    buttonUtterance: {type: string, nullable: true}
+                    phoneNumber: {type: string, nullable: true}
+                  additionalProperties: true
+              additionalProperties: true
+      responses:
+        '200':
+          description: Gateway log emitted; expiration headers set
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: {type: string, enum: [OK]}
+        default: {$ref: '#/components/responses/Error'}
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: __Host-sh-session
+  parameters:
+    Channel:
+      name: channelId
+      in: query
+      required: false
+      description: Required when no session cookie exists; may be omitted when reusing a known session.
+      schema: {type: string, format: uuid}
+    Key:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: {type: string, pattern: '^[A-Za-z0-9._:-]{1,128}$'}
+    Thread:
+      name: tid
+      in: path
+      required: true
+      schema: {type: string}
+  schemas:
+    Session:
+      type: object
+      required: [userType, expiresAt, serverTime, threadId]
+      properties:
+        threadId: {type: string}
+        userType: {type: string, enum: [MEMBER, GUEST]}
+        expiresAt: {type: integer, format: int64, description: UTC epoch milliseconds}
+        serverTime: {type: integer, format: int64, description: UTC epoch milliseconds}
+    Error:
+      description: GW errors use 400 INVALID_ARGUMENT, 401 UNAUTHENTICATED, 403 PERMISSION_DENIED, 503 UNAVAILABLE. HTTP routing errors 404/405 and unexpected 500 remain. B/E status and body pass through unchanged.
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, status, message]
+          properties:
+            code: {type: integer}
+            status: {type: string}
+            message: {type: string, enum: ['']}
+            failedAuthReqIds:
+              type: array
+              items: {type: string}
+  responses:
+    Error:
+      description: HTTP matches error.code; message is always empty
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}

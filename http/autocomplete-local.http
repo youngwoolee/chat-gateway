@@ -1,0 +1,18 @@
+# local 환경 선택 후 session-local.http에서 세션을 생성하세요.
+# 자동완성 mock은 AUTOCOMPLETE_BASE_URL(기본 localhost:8001)에 실행합니다.
+### 자동완성 (키 없이 조회, 세션 연장 없음)
+# @no-cookie-jar
+POST {{baseUrl}}/api/chat/auto
+Origin: {{baseUrl}}
+Cookie: __Host-sh-session={{shSession}}
+Content-Type: application/json
+
+{"queryText":"카드","size":10,"channel":"sol-chat"}
+
+> {%
+  client.test("자동완성 성공", function () {
+    client.assert(response.status === 200);
+    client.assert(response.body.code === "SUCCESS");
+    client.assert(Array.isArray(response.body.data.chatResponse));
+  });
+%}

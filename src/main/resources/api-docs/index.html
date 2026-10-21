@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Chat Gateway API 명세</title>
+  <link rel="stylesheet" href="./vendor/swagger-ui.css">
+  <style>body{margin:0;background:#fafafa}header{padding:24px max(24px,calc((100% - 1460px)/2));background:#132d46;color:white;font:15px/1.7 system-ui}header h1{font-size:24px;margin:0 0 8px}header a{color:#a9d9ff;margin-right:18px}header p{margin:6px 0}.swagger-ui .topbar{background:#203e59}</style>
+</head>
+<body>
+<header>
+  <h1>Chat Gateway · API 연동 명세</h1>
+  <p>세션 인증, 클릭 로그 중계, 채팅/SSE와 추가 인증. 상단 선택 메뉴에서 FE API와 B/E 등록 API를 전환하세요.</p>
+  <p><a href="./gateway-api-guide.pdf">PDF 다운로드</a><a href="./external-api.yaml">FE OpenAPI</a><a href="./python-internal-api.yaml">B/E OpenAPI</a></p>
+  <p>local 프로필 전용입니다. 실제 호출은 동일 Origin의 HTTPS 환경에서 세션 쿠키를 발급받아 진행하세요.<br>
+  HttpOnly 쿠키는 브라우저가 관리합니다. HTTP 로컬 테스트는 프로젝트의 .http 예제를 이용하세요. SSE 수신은 프론트 fetch로 별도 확인합니다.</p>
+</header>
+<div id="swagger-ui"></div>
+<script src="./vendor/swagger-ui-bundle.js"></script>
+<script src="./vendor/swagger-ui-standalone-preset.js"></script>
+<script src="./init.js"></script>
+</body>
+</html>

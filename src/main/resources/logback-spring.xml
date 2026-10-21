@@ -1,0 +1,37 @@
+<configuration>
+    <include resource="org/springframework/boot/logging/logback/base.xml"/>
+    <springProperty scope="context" name="AUDIT_PATH" source="logging.jsonfile.path" defaultValue="./logs"/>
+    <springProperty scope="context" name="APP_NAME" source="spring.application.name" defaultValue="chat-gateway"/>
+
+    <!-- 기존 수집기가 읽는 파일명·JSON provider 구성을 유지한다. -->
+    <appender name="KAFKA_JSON_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${AUDIT_PATH}/${APP_NAME}-kafka-json.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>${AUDIT_PATH}/${APP_NAME}-kafka-json.%d{yyyy-MM-dd}.log</fileNamePattern>
+            <maxHistory>14</maxHistory>
+        </rollingPolicy>
+        <encoder class="net.logstash.logback.encoder.LoggingEventCompositeJsonEncoder">
+            <providers>
+                <timestamp/>
+                <logLevel/>
+                <threadName/>
+                <loggerName/>
+                <provider class="net.logstash.logback.composite.loggingevent.ArgumentsJsonProvider"/>
+                <mdc/>
+                <stackTrace/>
+            </providers>
+        </encoder>
+    </appender>
+
+    <!-- 큐 포화 시 INFO를 버리지 않는다. 로그 파일 쓰기 지연은 요청에 전파될 수 있다. -->
+    <appender name="KAFKA_JSON" class="ch.qos.logback.classic.AsyncAppender">
+        <queueSize>8192</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <neverBlock>false</neverBlock>
+        <maxFlushTime>5000</maxFlushTime>
+        <appender-ref ref="KAFKA_JSON_FILE"/>
+    </appender>
+    <logger name="AUDIT" level="INFO" additivity="false">
+        <appender-ref ref="KAFKA_JSON"/>
+    </logger>
+</configuration>

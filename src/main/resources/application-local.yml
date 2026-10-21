@@ -1,0 +1,30 @@
+# local 테스트 전용 설정. 운영에서는 이 프로필을 활성화하지 않는다.
+chat:
+  session:
+    # 아래 고정 자격증명과 demo-apply는 로컬 호출 예제 전용이다.
+    backend-credential: local-gateway-to-backend
+    inbound-credential: local-backend-to-gateway
+    allowed-interfaces: [demo-apply]
+  channels:
+    allowed:
+      "00000000-0000-0000-0000-000000000001": PFC
+      "00000000-0000-0000-0000-000000000002": PFC
+  staging:
+    channels:
+      "00000000-0000-0000-0000-000000000002": ${STAGING_BACKEND_URL:http://localhost:8002}
+    local-allowed-customers:
+      "00000000-0000-0000-0000-000000000002": [local-member]
+
+eureka:
+  client:
+    enabled: false
+
+# 로컬에서는 Eureka 대신 SimpleDiscoveryClient가 mock 서버를 찾는다.
+spring:
+  cloud:
+    discovery:
+      client:
+        simple:
+          instances:
+            search-autocomplete-service:
+              - uri: ${AUTOCOMPLETE_BASE_URL:http://localhost:8001}
