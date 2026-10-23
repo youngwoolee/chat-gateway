@@ -2,7 +2,6 @@ package com.example.chatgateway.config;
 
 import com.example.chatgateway.client.pfc.PfcClient;
 import com.example.chatgateway.exception.GatewayException;
-import com.example.chatgateway.session.AuthRequest;
 import java.time.Clock;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -27,22 +26,16 @@ public class SessionConfiguration {
   PfcClient unavailablePlatform() {
     return new PfcClient() {
       /** 운영 PFC 미연결 상태에서는 고객 인증을 허용하지 않고 503을 반환한다. */
-      public String authenticate(IdentityCookies c, String k) {
+      public String authenticate(IdentityCookies c) {
         throw GatewayException.unavailable();
       }
 
       /** 운영 KMS·플랫폼 미연결 상태에서는 홈페이지 로그인 쿠키를 발급하지 않는다. */
-      public IdentityCookies homepage(String s, String k) {
+      public IdentityCookies homepage(String s) {
         throw GatewayException.unavailable();
       }
 
-      /** 운영 인증 시스템 미연결 상태에서는 MFA 도전을 생성하지 않는다. */
-      public String start(AuthRequest o) {
-        throw GatewayException.unavailable();
-      }
-
-      /** 운영 인증 시스템 미연결 상태에서는 tx를 승인하지 않는다. */
-      public VerifiedTx verify(MfaResult t, AuthRequest o) {
+      public String verify(MfaInput input, String state) {
         throw GatewayException.unavailable();
       }
     };

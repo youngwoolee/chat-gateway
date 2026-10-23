@@ -1,6 +1,5 @@
 package com.example.chatgateway.client.agent;
 
-import com.example.chatgateway.config.SessionSettings;
 import com.example.chatgateway.gateway.RequestIdFilter;
 import com.example.chatgateway.service.ChatAuthenticationService.AuthenticatedChat;
 import jakarta.servlet.http.HttpServletRequest;
@@ -25,12 +24,6 @@ public class BackendHeaders {
           "transfer-encoding",
           "upgrade");
 
-  private final SessionSettings settings;
-
-  public BackendHeaders(SessionSettings settings) {
-    this.settings = settings;
-  }
-
   /** 외부 신원 주장을 제거하고 인증 서비스가 확정한 신원만 전달한다. */
   public HttpHeaders request(HttpServletRequest request, AuthenticatedChat authenticated) {
     var input = new HttpHeaders();
@@ -38,15 +31,12 @@ public class BackendHeaders {
         .forEach(name -> input.put(name, Collections.list(request.getHeaders(name))));
     var headers = clean(input, true);
     var session = authenticated.session();
-    headers.set("Authorization", "Bearer " + settings.backendCredential());
     headers.set("X-Authenticated-User-Id", session.subject());
-    headers.set("X-Authenticated-User-Type", session.userType());
     headers.set("X-Authenticated-Channel-Id", session.channel());
     String guest = session.member() ? session.guestSubject() : session.subject();
     if (guest != null) headers.set("X-Authenticated-Guest-Id", guest);
-    if (authenticated.context() != null) headers.set("X-Auth-Context", authenticated.context());
-    if (!authenticated.verifiedAuthIds().isEmpty())
-      headers.set("X-Verified-Auth-Requests", String.join(", ", authenticated.verifiedAuthIds()));
+    if (authenticated.verifiedRequestId() != null)
+      headers.set("X-Verified-Request-Id", authenticated.verifiedRequestId());
     headers.set("X-Request-Id", RequestIdFilter.id(request));
     return headers;
   }
@@ -66,11 +56,14 @@ public class BackendHeaders {
           if (excluded.contains(lower)) return;
           if (request
               && (identity(lower)
+                  || lower.equals("idempotency-key")
                   || lower.equals("expect")
                   || lower.equals("host")
                   || lower.equals("content-length"))) return;
-          if (!request && (lower.equals("x-chat-auth-expires-at") || lower.equals("x-server-time")))
-            return;
+          if (!request
+              && (lower.equals("x-chat-user-type")
+                  || lower.equals("x-chat-auth-expires-at")
+                  || lower.equals("x-server-time"))) return;
           output.addAll(name, values);
         });
     return output;
@@ -83,9 +76,8 @@ public class BackendHeaders {
 
   /** 브라우저의 신원·서비스 인증·전달 경로 주장은 신뢰하지 않는다. */
   private boolean identity(String name) {
-    return name.equals("x-verified-login")
+    return name.startsWith("x-verified-")
         || name.equals("x-requested-login")
-        || name.equals("x-verified-auth-requests")
         || name.equals("cookie")
         || name.equals("authorization")
         || name.startsWith("x-auth")

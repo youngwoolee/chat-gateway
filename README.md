@@ -38,6 +38,14 @@ python docs/tools/build-api-pdf.py --font /path/to/korean.ttf
 | 내부망 local | `./gradlew bootRun --args='--spring.profiles.active=local'` | 내부 개발 서비스 |
 | 내부망 dev/prod | 기본 bootJar에 해당 프로필 지정 | 배포 환경의 실제 서비스 |
 
-local/dev/prod는 EUREKA_URL·BACKEND_BASE_URL·서비스 토큰·채널·Document DB 설정을 외부에서 주입합니다. 실제 PFC 구현은 별도 필요하며 미구현이면 503입니다. 환경별 주소를 코드에 가정하지 않습니다. offline과 local/dev/prod의 동시 활성화는 금지합니다.
+local/dev/prod는 EUREKA_URL·BACKEND_BASE_URL·서비스 토큰·채널·Document DB 설정을 외부에서 주입합니다. 실제 PFC 구현은 별도 필요합니다. 미연결 시 start는 게스트를 생성하고, 업무 통합인증은 503으로 거절합니다. 환경별 주소를 코드에 가정하지 않습니다. offline과 local/dev/prod의 동시 활성화는 금지합니다.
 
 `src/offline/java`, `resources`, `test`, `http`는 외부망 전용입니다. 기본 JAR에 포함하지 않으며 `check`는 일반 `test`와 `offlineTest`를 모두 실행합니다. 더 이상 필요 없으면 `src/offline`을 삭제하고 build.gradle.kts의 외부망 전용 블록을 제거합니다. 디렉터리가 없으면 블록은 자동으로 건너뛰므로 공통 코드와 일반 테스트는 그대로 빌드됩니다. 개인 HTTP Client 설정은 자동 삭제하지 않습니다.
+
+## 2026-10-23 계약 적용 시 연동 변경
+
+- B/E 호출 경로는 `/api/chat`이며 위자드는 `/api/chat/threads/{tid}/tools/{tool-name}/{tool-route}`입니다.
+- `Session` 저장·응답 DTO에서 `threadId`를 제거했습니다. 세션 서비스의 create/find/touch/replace-guest 계약도 맞춰 배포해야 합니다. 기존 restart 및 인증 등록·소비 API는 더 이상 호출하지 않습니다.
+- FE는 로그인 복귀 시 `_O`와 함께 start를 호출합니다. `/api/auth/session/restart`, `/internal/v1/auth/operations`, `X-Requested-Login` 로그인 전환은 제거했습니다.
+- PFC 어댑터는 `verify(MfaInput, state)`에서 티켓·식별값·`__state_as_id`를 검증/소비하고 회원 PID를 반환해야 합니다. 거절은 401/403 예외, 통신 실패는 503으로 구분합니다. 실제 HTTP 주소·직렬화 계약은 운영 PFC 구현에서 연결해야 합니다.
+- 게스트 대화 연결을 위해 기존 `guestSubject`와 `X-Authenticated-Guest-Id` 전달은 유지했습니다. B/E가 이 신원을 사용하는 방식은 별도 합의가 필요합니다. 추적용 `X-Request-Id`도 유지합니다.

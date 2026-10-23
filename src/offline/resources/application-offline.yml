@@ -2,21 +2,16 @@
 chat:
   backend:
     base-url: ${BACKEND_BASE_URL:http://127.0.0.1:8000}
-  session:
-    # 아래 고정 자격증명과 demo-apply는 로컬 호출 예제 전용이다.
-    backend-credential: local-gateway-to-backend
-    inbound-credential: local-backend-to-gateway
-    allowed-interfaces: [demo-apply]
   channels:
     allowed:
       "00000000-0000-0000-0000-000000000001": PFC
-      "00000000-0000-0000-0000-000000000002": PFC
+      "00000002-0000-0000-0000-000000000002": PFC
   staging:
     channels:
-      "00000000-0000-0000-0000-000000000002": ${STAGING_BACKEND_URL:http://localhost:8002}
+      "00000002-0000-0000-0000-000000000002": ${STAGING_BACKEND_URL:http://localhost:8002}
   offline:
     allowed-customers:
-      "00000000-0000-0000-0000-000000000002": [local-member]
+      "00000002-0000-0000-0000-000000000002": [P000000001]
 
 eureka:
   client:

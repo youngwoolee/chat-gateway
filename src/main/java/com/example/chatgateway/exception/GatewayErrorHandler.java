@@ -9,12 +9,10 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.SocketTimeoutException;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import org.springframework.boot.web.servlet.error.ErrorController;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.ErrorResponse;
-import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -35,10 +33,6 @@ public class GatewayErrorHandler implements ErrorController {
   @ExceptionHandler(Exception.class)
   public void handleRequest(
       HttpServletRequest request, HttpServletResponse response, Exception error) throws Exception {
-    if (error instanceof HttpRequestMethodNotSupportedException
-        && (request.getRequestURI().equals("/api/chat")
-            || request.getRequestURI().startsWith("/api/chat/")))
-      error = new GatewayException(404, "NOT_FOUND");
     handle(response, error, request.getRequestURI().startsWith("/api/"));
   }
 
@@ -68,8 +62,9 @@ public class GatewayErrorHandler implements ErrorController {
     write(
         response,
         code,
-        !frontend && error instanceof GatewayException g ? g.status() : status(code),
-        error instanceof GatewayException g ? g.failedAuthReqIds() : List.of());
+        error instanceof GatewayException g && (!frontend || "MFA_INVALID".equals(g.status()))
+            ? g.status()
+            : status(code));
   }
 
   /** 서블릿 오류 디스패치도 동일한 빈 메시지 JSON으로 통일한다. */
@@ -80,12 +75,11 @@ public class GatewayErrorHandler implements ErrorController {
     int status = code instanceof Integer value ? value : 404;
     Object original = request.getAttribute(RequestDispatcher.ERROR_REQUEST_URI);
     if (original instanceof String uri && uri.startsWith("/api/")) status = frontendCode(status);
-    write(response, status, status(status), List.of());
+    write(response, status, status(status));
   }
 
   /** 기존 오류 코드와 캐시 금지 정책을 직렬화한다. */
-  private void write(HttpServletResponse response, int code, String status, List<String> failedIds)
-      throws IOException {
+  private void write(HttpServletResponse response, int code, String status) throws IOException {
     response.setStatus(code);
     response.setContentType("application/json");
     response.setHeader("Cache-Control", "no-store");
@@ -93,7 +87,6 @@ public class GatewayErrorHandler implements ErrorController {
     detail.put("code", code);
     detail.put("status", status);
     detail.put("message", "");
-    if (!failedIds.isEmpty()) detail.put("failedAuthReqIds", failedIds);
     mapper.writeValue(response.getOutputStream(), Map.of("error", detail));
   }
 
@@ -118,7 +111,7 @@ public class GatewayErrorHandler implements ErrorController {
       case 502 -> "BAD_GATEWAY";
       case 503 -> "UNAVAILABLE";
       case 504 -> "DEADLINE_EXCEEDED";
-      default -> "INTERNAL";
+      default -> "INTERNAL_ERROR";
     };
   }
 }

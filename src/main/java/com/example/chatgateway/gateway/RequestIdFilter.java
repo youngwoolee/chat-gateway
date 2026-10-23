@@ -14,6 +14,12 @@ import org.springframework.web.filter.OncePerRequestFilter;
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public class RequestIdFilter extends OncePerRequestFilter {
+  private final java.time.Clock clock;
+
+  public RequestIdFilter(java.time.Clock clock) {
+    this.clock = clock;
+  }
+
   public static final String ATTRIBUTE = RequestIdFilter.class.getName() + ".id";
 
   /** 허용 형식의 추적 ID만 보존하고 후속 프록시가 사용할 요청 속성에 저장한다. */
@@ -21,6 +27,7 @@ public class RequestIdFilter extends OncePerRequestFilter {
   protected void doFilterInternal(
       HttpServletRequest request, HttpServletResponse response, FilterChain chain)
       throws ServletException, IOException {
+    response.setHeader("X-Server-Time", Long.toString(clock.millis()));
     String supplied = request.getHeader("X-Request-Id");
     request.setAttribute(
         ATTRIBUTE,

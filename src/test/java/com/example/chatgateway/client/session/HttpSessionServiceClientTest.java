@@ -5,7 +5,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.example.chatgateway.config.SessionServiceProperties;
 import com.example.chatgateway.exception.GatewayException;
-import com.example.chatgateway.session.AuthRequest;
 import com.example.chatgateway.session.AuthorityStore;
 import com.example.chatgateway.session.Session;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -66,8 +65,7 @@ class HttpSessionServiceClientTest {
   RestClient.Builder builder;
 
   private final Session session =
-      new Session(
-          "hashed-id", "member", "MEMBER", "channel", "ACTIVE", 100, 300100, null, "thread");
+      new Session("hashed-id", "P123456789", "MEMBER", "channel", "ACTIVE", 100, 300100, null);
 
   @BeforeEach
   void drainRequests() throws InterruptedException {
@@ -98,8 +96,6 @@ class HttpSessionServiceClientTest {
     assertThat(store.find("missing")).isNull();
     SERVER.enqueue(new MockResponse().setResponseCode(404).setBody("Not Found"));
     unavailable(() -> store.find("missing"));
-    SERVER.enqueue(error(404, "SESSION_NOT_FOUND"));
-    unavailable(() -> store.authRequest("missing"));
   }
 
   @Test
@@ -133,16 +129,14 @@ class HttpSessionServiceClientTest {
   void neverRetriesUncertainMutationOrFollowsRedirect() throws Exception {
     int before = SERVER.getRequestCount();
     SERVER.enqueue(new MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST));
-    unavailable(() -> store.consumeAuth(command()));
-    assertThat(SERVER.takeRequest(1, TimeUnit.SECONDS).getPath())
-        .endsWith("/consume-auth-requests");
+    unavailable(() -> store.touch("hashed-id", 100, 300000, null));
+    assertThat(SERVER.takeRequest(1, TimeUnit.SECONDS).getPath()).endsWith("/touch-session");
     assertThat(SERVER.takeRequest(350, TimeUnit.MILLISECONDS)).isNull();
     assertThat(SERVER.getRequestCount() - before).isEqualTo(1);
     SERVER.enqueue(
         new MockResponse().setResponseCode(307).setHeader("Location", SERVER.url("/unexpected")));
-    unavailable(() -> store.consumeAuth(command()));
-    assertThat(SERVER.takeRequest(1, TimeUnit.SECONDS).getPath())
-        .endsWith("/consume-auth-requests");
+    unavailable(() -> store.touch("hashed-id", 100, 300000, null));
+    assertThat(SERVER.takeRequest(1, TimeUnit.SECONDS).getPath()).endsWith("/touch-session");
     assertThat(SERVER.takeRequest(350, TimeUnit.MILLISECONDS)).isNull();
   }
 
@@ -174,7 +168,7 @@ class HttpSessionServiceClientTest {
   }
 
   @Test
-  void promotionAndConsumptionAreSingleCommandsWithAllPreconditions() throws Exception {
+  void promotionIsOneAtomicCommandWithAllPreconditions() throws Exception {
     SERVER.enqueue(new MockResponse().setBody(mapper.writeValueAsString(session)));
     assertThat(store.replaceGuest("guest-hash", "replacement-key", session, 100))
         .isEqualTo(session);
@@ -184,83 +178,45 @@ class HttpSessionServiceClientTest {
     assertThat(json.path("hash").asText()).isEqualTo("guest-hash");
     assertThat(json.has("fingerprint")).isFalse();
     assertThat(json.path("replacement").path("idHash").asText()).isEqualTo("hashed-id");
-    var receipt =
-        new AuthorityStore.ResumeReceipt(
-            "hashed-id", "resume", "fingerprint", List.of("ar_one", "ar_two"), 120100);
-    SERVER.enqueue(new MockResponse().setBody(mapper.writeValueAsString(receipt)));
-    assertThat(store.consumeAuth(command())).isEqualTo(receipt);
-    var consume = SERVER.takeRequest(1, TimeUnit.SECONDS);
-    json = mapper.readTree(consume.getBody().readUtf8());
-    assertThat(consume.getPath()).endsWith("/consume-auth-requests");
-    assertThat(json.path("sessionHash").asText()).isEqualTo("hashed-id");
-    assertThat(json.path("proofs").size()).isEqualTo(2);
-    assertThat(json.path("fingerprint").asText()).isEqualTo("fingerprint");
-    assertThat(SERVER.takeRequest(50, TimeUnit.MILLISECONDS)).isNull();
   }
 
   @Test
-  void rejectsWrongSessionAndAuthenticationRequestIdentity() throws Exception {
+  void rejectsWrongSessionIdentity() throws Exception {
     SERVER.enqueue(new MockResponse().setBody(mapper.writeValueAsString(session)));
     unavailable(() -> store.find("different-hash"));
-    SERVER.enqueue(new MockResponse().setBody(mapper.writeValueAsString(authRequest())));
-    unavailable(() -> store.authRequest("different-request"));
   }
 
   @Test
-  void resumeLookupRequiresExplicitAbsenceAndConsumptionCannotReturnOtherIds() throws Exception {
-    SERVER.enqueue(error(404, "RESUME_NOT_FOUND"));
-    assertThat(store.findResume("hashed-id", "resume")).isNull();
-    SERVER.enqueue(error(404, "NOT_FOUND"));
-    unavailable(() -> store.findResume("hashed-id", "resume"));
-    var wrong =
-        new AuthorityStore.ResumeReceipt(
-            "hashed-id", "resume", "fingerprint", List.of("ar_other"), 120100);
-    SERVER.enqueue(new MockResponse().setBody(mapper.writeValueAsString(wrong)));
-    unavailable(() -> store.consumeAuth(command()));
+  void guestCreationRequestsAnIdFromSessionService() throws Exception {
+    var proposal = new Session("guest-hash", null, "GUEST", "channel", "ACTIVE", 100, 300100, null);
+    var assigned =
+        new Session("guest-hash", "G000000000123", "GUEST", "channel", "ACTIVE", 100, 300100, null);
+    SERVER.enqueue(new MockResponse().setBody(mapper.writeValueAsString(assigned)));
+    assertThat(store.create(proposal, "create-key")).isEqualTo(assigned);
+    var request = SERVER.takeRequest(1, TimeUnit.SECONDS);
+    assertThat(request.getPath()).isEqualTo("/internal/v1/authority/create-session");
+    var json = mapper.readTree(request.getBody().readUtf8());
+    assertThat(json.path("session").path("subject").isNull()).isTrue();
+    assertThat(json.path("creationKey").asText()).isEqualTo("create-key");
+    for (String badId : new String[] {"guest-old", "P000000001", "G123", "G1234567890123"}) {
+      var invalid =
+          new Session("guest-hash", badId, "GUEST", "channel", "ACTIVE", 100, 300100, null);
+      SERVER.enqueue(new MockResponse().setBody(mapper.writeValueAsString(invalid)));
+      unavailable(() -> store.create(proposal, "create-key"));
+      SERVER.takeRequest(1, TimeUnit.SECONDS);
+    }
   }
 
   @Test
-  void consumptionErrorsCanOnlyExposeSubmittedRequestIds() {
-    SERVER.enqueue(
-        new MockResponse()
-            .setResponseCode(403)
-            .setBody(
-                "{\"error\":{\"code\":403,\"status\":\"MFA_INVALID\",\"failedAuthReqIds\":[\"ar_one\"]}}"));
-    assertThatThrownBy(() -> store.consumeAuth(command()))
-        .isInstanceOfSatisfying(
-            GatewayException.class,
-            e -> assertThat(e.failedAuthReqIds()).containsExactly("ar_one"));
-    SERVER.enqueue(
-        new MockResponse()
-            .setResponseCode(403)
-            .setBody(
-                "{\"error\":{\"code\":403,\"status\":\"MFA_INVALID\",\"failedAuthReqIds\":[\"ar_other\"]}}"));
-    unavailable(() -> store.consumeAuth(command()));
-  }
-
-  @Test
-  void typedRequestsPreserveCreationAndSdkContracts() throws Exception {
+  void creationRequestPreservesSessionContract() throws Exception {
     SERVER.enqueue(new MockResponse().setBody(mapper.writeValueAsString(session)));
     assertThat(store.create(session, null)).isEqualTo(session);
     var create = mapper.readTree(SERVER.takeRequest(1, TimeUnit.SECONDS).getBody().readUtf8());
     assertThat(create.has("creationKey")).isTrue();
     assertThat(create.path("creationKey").isNull()).isTrue();
+    assertThat(create.path("session").has("threadId")).isFalse();
     assertThat(create.path("session"))
         .isEqualTo(mapper.readTree(mapper.writeValueAsString(session)));
-
-    var auth = authRequest();
-    SERVER.enqueue(new MockResponse().setBody(mapper.writeValueAsString(auth)));
-    assertThat(store.registerAuth(auth, 100)).isEqualTo(auth);
-    var register = mapper.readTree(SERVER.takeRequest(1, TimeUnit.SECONDS).getBody().readUtf8());
-    assertThat(register.path("request"))
-        .isEqualTo(mapper.readTree(mapper.writeValueAsString(auth)));
-    assertThat(register.path("now").asLong()).isEqualTo(100);
-
-    SERVER.enqueue(new MockResponse().setBody(mapper.writeValueAsString(auth)));
-    assertThat(store.saveSdkInput("ar_one", "sdk", 100)).isEqualTo(auth);
-    var sdk = mapper.readTree(SERVER.takeRequest(1, TimeUnit.SECONDS).getBody().readUtf8());
-    assertThat(sdk)
-        .isEqualTo(mapper.readTree("{\"id\":\"ar_one\",\"sdkInput\":\"sdk\",\"now\":100}"));
   }
 
   @Test
@@ -275,57 +231,6 @@ class HttpSessionServiceClientTest {
     json.putNull("expiresAt");
     SERVER.enqueue(new MockResponse().setBody(mapper.writeValueAsString(json)));
     unavailable(() -> store.find("hashed-id"));
-    json = (ObjectNode) mapper.valueToTree(authRequest());
-    json.putNull("subject");
-    SERVER.enqueue(new MockResponse().setBody(mapper.writeValueAsString(json)));
-    unavailable(() -> store.authRequest("ar_one"));
-  }
-
-  @Test
-  void restartUsesOneAtomicCommandAndRejectsUnrelatedSession() throws Exception {
-    var command =
-        new AuthorityStore.RestartSession(
-            "old-hash", "restart-key", "thread", "hashed-id", 100, 300000);
-    SERVER.enqueue(new MockResponse().setBody(mapper.writeValueAsString(session)));
-    assertThat(store.restart(command)).isEqualTo(session);
-    var request = SERVER.takeRequest(1, TimeUnit.SECONDS);
-    assertThat(request.getPath()).endsWith("/restart-session");
-    assertThat(mapper.readTree(request.getBody().readUtf8()))
-        .isEqualTo(mapper.readTree(mapper.writeValueAsString(command)));
-    SERVER.enqueue(new MockResponse().setBody(mapper.writeValueAsString(session)));
-    unavailable(
-        () ->
-            store.restart(
-                new AuthorityStore.RestartSession(
-                    "other", "key", "thread", "unrelated", 100, 300000)));
-  }
-
-  private AuthorityStore.ConsumeAuth command() {
-    return new AuthorityStore.ConsumeAuth(
-        "hashed-id",
-        "resume",
-        "fingerprint",
-        "thread",
-        List.of(
-            new AuthorityStore.Proof("ar_one", "proof1", 120100),
-            new AuthorityStore.Proof("ar_two", "proof2", 120100)),
-        100);
-  }
-
-  private AuthRequest authRequest() {
-    return new AuthRequest(
-        "ar_one",
-        "key",
-        "member",
-        "channel",
-        "thread",
-        "op",
-        "v1",
-        "apply",
-        "hash",
-        new AuthRequest.Comparison("test", null, "code", "usage", "content"),
-        300100,
-        "sdk");
   }
 
   private MockResponse error(int code, String status) {

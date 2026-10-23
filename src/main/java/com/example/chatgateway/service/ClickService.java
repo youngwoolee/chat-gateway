@@ -32,7 +32,7 @@ public class ClickService {
     this.clock = clock;
   }
 
-  /** 검증된 클릭만 세션 활동으로 반영하고 JSON 로그로 기록한다. 재전송 로그는 key로 식별한다. */
+  /** 검증된 클릭을 세션 활동으로 반영하고 JSON 로그로 기록한다. */
   public void record(HttpServletRequest request, HttpServletResponse response) throws IOException {
     if (request.getContentLengthLong() > 1048576)
       throw new GatewayException(413, "RESOURCE_EXHAUSTED");
@@ -41,20 +41,18 @@ public class ClickService {
     JsonNode json = parse(body);
     String thread = Credentials.identifier(json.path("threadId").textValue());
     if (request.getHeader("X-Mfa-Result") != null) throw GatewayException.badRequest();
-    String key = SessionAuthentication.key(request);
     var session = auth.inspect(request, response);
-    if (!session.threadId().equals(thread)) throw GatewayException.conflict();
-    ObjectNode event = auditEvent(json, session, key);
-    auth.activity(response, session, "click:" + key);
+    ObjectNode event = auditEvent(json, session, thread);
+    auth.activity(response, session);
     AUDIT.info("click log request: {}", kv("message", event));
   }
 
   /** 기존 수집기의 message 형식을 유지한다. sessionId는 인증 쿠키가 아닌 대화 ID다. */
-  private ObjectNode auditEvent(JsonNode input, Session session, String key) {
+  private ObjectNode auditEvent(JsonNode input, Session session, String thread) {
     ObjectNode event = mapper.createObjectNode();
     event.put("chatbot", "new-chatbot");
     event.put("name", "click");
-    event.put("sessionId", session.threadId());
+    event.put("sessionId", thread);
     event.put("channelId", session.channel());
     event.put("userId", session.member() ? session.subject() : null);
     event.put("login", session.member());
@@ -72,8 +70,7 @@ public class ClickService {
     // 이탈 분석용 신규 정보는 기존 message 안에 추가한다. 임의 최상위 입력은 기록하지 않는다.
     event.put("event", "chatbot_click");
     event.put("receivedAt", clock.millis());
-    event.put("key", key);
-    event.put("threadId", session.threadId());
+    event.put("threadId", thread);
     event.put("userType", session.userType());
     for (String field : new String[] {"scenarioId", "state", "component"})
       event.set(field, input.get(field));

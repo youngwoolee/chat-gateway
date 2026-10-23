@@ -1,9 +1,8 @@
 package com.example.chatgateway.gateway;
 
-import com.example.chatgateway.client.pfc.PfcClient.MfaResult;
+import com.example.chatgateway.client.pfc.PfcClient.MfaInput;
 import com.example.chatgateway.config.MfaProperties;
 import com.example.chatgateway.exception.GatewayException;
-import com.example.chatgateway.session.Credentials;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -12,7 +11,6 @@ import java.util.HashSet;
 import java.util.List;
 import org.springframework.stereotype.Component;
 
-/** 외부 MFA 헤더를 검증된 입력 목록으로 변환한다. */
 @Component
 public class MfaResultParser {
   private final MfaProperties policy;
@@ -23,9 +21,8 @@ public class MfaResultParser {
     this.mapper = mapper;
   }
 
-  /** 헤더 전체를 제한된 크기로 엄격 파싱한다. 중복/알 수 없는 필드는 검증 전에 거절한다. */
-  public List<MfaResult> parse(List<String> headers) {
-    if (headers.isEmpty()) return List.of();
+  public MfaInput parse(List<String> headers) {
+    if (headers.isEmpty()) return null;
     if (headers.size() != 1) throw GatewayException.badRequest();
     String encoded = headers.getFirst();
     if (encoded.length() > policy.maxHeaderBytes() || !encoded.matches("[A-Za-z0-9_-]+"))
@@ -34,28 +31,40 @@ public class MfaResultParser {
       byte[] bytes = Base64.getUrlDecoder().decode(encoded);
       if (!Base64.getUrlEncoder().withoutPadding().encodeToString(bytes).equals(encoded))
         throw GatewayException.badRequest();
-      MfaResult[] values =
+      var json =
           mapper
-              .readerFor(MfaResult[].class)
+              .reader()
               .with(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
-              .with(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
               .with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
-              .readValue(bytes);
-      if (values == null || values.length == 0 || values.length > policy.maxResults())
+              .readTree(bytes);
+      if (!json.isObject() || !json.path("code").isTextual() || !json.path("ticketIds").isArray())
         throw GatewayException.badRequest();
-      var ids = new HashSet<String>();
-      for (var value : values) {
-        if (value == null) throw GatewayException.badRequest();
-        Credentials.identifier(value.authReqId());
-        Credentials.identifier(value.tranID());
-        Credentials.identifier(value.method());
-        if (value.txId() != null) Credentials.identifier(value.txId());
-        if (!ids.add(value.authReqId())) throw GatewayException.badRequest();
-      }
-      return List.of(values);
-    } catch (GatewayException e) {
-      throw e;
-    } catch (Exception e) {
+      for (var ticket : json.path("ticketIds"))
+        if (!ticket.isTextual()) throw GatewayException.badRequest();
+      for (String field : new String[] {"source", "componentId"})
+        if (json.hasNonNull(field) && !json.path(field).isTextual())
+          throw GatewayException.badRequest();
+      MfaInput input =
+          mapper
+              .readerFor(MfaInput.class)
+              .with(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+              .readValue(json);
+      if (input == null
+          || input.identifier() == null
+          || !input.identifier().isObject()
+          || !input.identifier().path("ssn").isTextual()
+          || input.identifier().path("ssn").asText().isBlank()
+          || !input.identifier().path("iPin").isTextual()
+          || input.identifier().path("iPin").asText().isBlank()
+          || input.code() == null
+          || input.code().isBlank()
+          || input.ticketIds() == null
+          || input.ticketIds().isEmpty()
+          || input.ticketIds().stream().anyMatch(t -> t == null || t.isBlank())
+          || new HashSet<>(input.ticketIds()).size() != input.ticketIds().size())
+        throw GatewayException.badRequest();
+      return input;
+    } catch (Exception invalid) {
       throw GatewayException.badRequest();
     }
   }

@@ -15,7 +15,6 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class SessionCookies {
-  public static final String NAME = "__Host-sh-session";
   private static final String SYSTEM_CODE_O = "PlatformSystemCode_O";
   private static final String AUTHENTICATION_O = "PlatformAuthentication_O";
   private static final String VERIFY_O = "PlatformVerify_O";
@@ -27,6 +26,14 @@ public class SessionCookies {
     this.settings = settings;
   }
 
+  /** 채널 UUID의 첫 구간으로 쿠키를 구분한다. 허용 채널의 접두사는 서로 달라야 한다. */
+  public static String name(String channel) {
+    String prefix = channel.split("-", 2)[0];
+    if (!prefix.matches("[A-Za-z0-9]+"))
+      throw new IllegalArgumentException("Invalid channel cookie prefix");
+    return "__Host-sh-session_" + prefix;
+  }
+
   /** 쿠키가 없으면 null을 반환하고 같은 이름이 여러 번 전달되면 인증 오류로 거절한다. */
   private String value(HttpServletRequest e, String name) {
     var matches = Arrays.stream(values(e)).filter(c -> name.equals(c.getName())).toList();
@@ -36,8 +43,8 @@ public class SessionCookies {
   }
 
   /** 세션 쿠키의 존재와 opaque ID 형식만 검사한다. 저장소 유효성 검사는 인증 서비스가 수행한다. */
-  public String session(HttpServletRequest e) {
-    String s = value(e, NAME);
+  public String session(HttpServletRequest e, String channel) {
+    String s = value(e, name(channel));
     return s == null ? null : Credentials.opaque(s);
   }
 
@@ -58,16 +65,45 @@ public class SessionCookies {
    * HttpOnly·Secure·SameSite=Lax·Path=/의 세션 쿠키를 발급한다. __Host- 규칙에 따라 Domain을 넣지 않으며 브라우저 세션 쿠키로
    * 유지한다.
    */
-  public void issue(HttpServletResponse e, String sid) {
+  public void issue(HttpServletResponse e, String sid, String channel) {
     e.addHeader(
         "Set-Cookie",
-        ResponseCookie.from(NAME, sid)
+        ResponseCookie.from(name(channel), sid)
             .httpOnly(true)
             .secure(true)
             .sameSite("Lax")
             .path("/")
             .build()
             .toString());
+  }
+
+  public void clear(HttpServletResponse response, String channel) {
+    response.addHeader(
+        "Set-Cookie",
+        ResponseCookie.from(name(channel), "")
+            .httpOnly(true)
+            .secure(true)
+            .sameSite("Lax")
+            .path("/")
+            .maxAge(Duration.ZERO)
+            .build()
+            .toString());
+  }
+
+  public boolean hasIdentity(HttpServletRequest request) {
+    return Arrays.stream(values(request)).anyMatch(c -> EXTERNAL.contains(c.getName()));
+  }
+
+  public String mfaState(HttpServletRequest request) {
+    String state;
+    try {
+      state = value(request, "__state_as_id");
+    } catch (GatewayException invalid) {
+      throw GatewayException.badRequest();
+    }
+    if (state == null || state.isBlank() || state.length() > 4096 || !state.matches("[!-~]+"))
+      throw GatewayException.badRequest();
+    return state;
   }
 
   /** 플랫폼 계약에 맞춘 공유 쿠키 빌더를 구성한다. 생성·삭제 모두 동일 Domain·Path를 사용해야 한다. */

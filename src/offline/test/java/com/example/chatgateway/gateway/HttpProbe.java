@@ -22,9 +22,15 @@ class HttpProbe {
   static final HttpClient HTTP =
       HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build();
   final String origin;
+  final String channel;
 
   HttpProbe(String origin) {
+    this(origin, null);
+  }
+
+  HttpProbe(String origin, String channel) {
     this.origin = origin;
+    this.channel = channel;
   }
 
   Request post() {
@@ -47,6 +53,8 @@ class HttpProbe {
 
     Request uri(String path) {
       this.path = path;
+      if (channel != null && path.startsWith("/api/") && !path.contains("channelId="))
+        this.path += (path.contains("?") ? "&" : "?") + "channelId=" + channel;
       return this;
     }
 

@@ -154,14 +154,14 @@ class ProxyDisconnectTest {
         Socket other = connect()) {
       headers(downstream);
       headers(other);
-      new HttpProbe("http://localhost:" + port)
+      new HttpProbe("http://localhost:" + port, SessionHttpIntegrationTest.CHANNEL)
           .get()
           .uri("/api/chat/threads")
           .exchange()
           .expectStatus()
           .isEqualTo(503);
       long begin = System.nanoTime();
-      new HttpProbe("http://localhost:" + port)
+      new HttpProbe("http://localhost:" + port, SessionHttpIntegrationTest.CHANNEL)
           .get()
           .uri("/actuator/health")
           .exchange()
@@ -225,7 +225,7 @@ class ProxyDisconnectTest {
       Thread active = upstream(activeClosed, new AtomicLong(), false);
       try (Socket held = connect()) {
         assertThat(headers(held)).startsWith("HTTP/1.1 200");
-        new HttpProbe("http://localhost:" + port)
+        new HttpProbe("http://localhost:" + port, SessionHttpIntegrationTest.CHANNEL)
             .get()
             .uri("/api/chat/threads")
             .exchange()
@@ -240,7 +240,7 @@ class ProxyDisconnectTest {
             .atMost(Duration.ofSeconds(1))
             .untilAsserted(
                 () ->
-                    new HttpProbe("http://localhost:" + port)
+                    new HttpProbe("http://localhost:" + port, SessionHttpIntegrationTest.CHANNEL)
                         .get()
                         .uri("/api/chat/threads")
                         .exchange()
@@ -390,8 +390,7 @@ class ProxyDisconnectTest {
             "ACTIVE",
             System.currentTimeMillis(),
             System.currentTimeMillis() + 300000,
-            null,
-            "thread"),
+            null),
         null);
     Socket socket = new Socket();
     socket.setReceiveBufferSize(1024);
@@ -401,16 +400,14 @@ class ProxyDisconnectTest {
     socket
         .getOutputStream()
         .write(
-            ("POST /api/chat HTTP/1.1\r\nHost: localhost:"
+            ("POST /api/chat?channelId=00000000-0000-0000-0000-000000000001 HTTP/1.1\r\nHost: localhost:"
                     + port
                     + "\r\nConnection: X-Hop\r\nX-Hop: must-not-forward\r\nOrigin: http://localhost:"
                     + port
                     + "\r\nCookie: "
-                    + SessionCookies.NAME
+                    + SessionCookies.name(SessionHttpIntegrationTest.CHANNEL)
                     + "="
                     + sid
-                    + "\r\nIdempotency-Key: "
-                    + Credentials.random()
                     + "\r\nContent-Type: application/json\r\nContent-Length: "
                     + body.length()
                     + "\r\n\r\n"

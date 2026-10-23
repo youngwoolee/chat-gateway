@@ -12,7 +12,6 @@ import java.net.URI;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
-import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
@@ -70,7 +69,7 @@ class ProxyTransportTest {
   void setup() throws Exception {
     while (BACKEND.takeRequest(1, TimeUnit.MILLISECONDS) != null) {}
     origin = "http://localhost:" + port;
-    client = new HttpProbe(origin);
+    client = new HttpProbe(origin, CHANNEL);
     sid = Credentials.random();
     store.create(
         new Session(
@@ -81,8 +80,7 @@ class ProxyTransportTest {
             "ACTIVE",
             System.currentTimeMillis(),
             System.currentTimeMillis() + 300000,
-            null,
-            "thread"),
+            null),
         null);
   }
 
@@ -91,17 +89,19 @@ class ProxyTransportTest {
         .post()
         .uri(path)
         .header("Origin", origin)
-        .header("Idempotency-Key", UUID.randomUUID().toString())
-        .cookie(SessionCookies.NAME, sid);
+        .cookie(SessionCookies.name(CHANNEL), sid);
   }
 
   HttpProbe.Request chat() {
-    return client.get().uri("/api/chat/threads/thread/messages").cookie(SessionCookies.NAME, sid);
+    return client
+        .get()
+        .uri("/api/chat/threads/thread/messages")
+        .cookie(SessionCookies.name(CHANNEL), sid);
   }
 
   @org.junit.jupiter.params.ParameterizedTest
   @org.junit.jupiter.params.provider.ValueSource(
-      strings = {"/api/chat", "/api/chat/threads/thread/tools/tool"})
+      strings = {"/api/chat", "/api/chat/threads/thread/tools/tool/data"})
   void expectContinueIsConsumedWithoutUpstreamStall(String path) throws Exception {
     BACKEND.enqueue(new MockResponse().setBody("ok"));
     byte[] body = "{\"threadId\":\"thread\"}".getBytes(StandardCharsets.UTF_8);
@@ -112,12 +112,14 @@ class ProxyTransportTest {
           .write(
               ("POST "
                       + path
+                      + "?channelId="
+                      + CHANNEL
                       + " HTTP/1.1\r\nHost: localhost:"
                       + port
                       + "\r\nOrigin: "
                       + origin
-                      + "\r\nIdempotency-Key: expect\r\nCookie: "
-                      + SessionCookies.NAME
+                      + "\r\nCookie: "
+                      + SessionCookies.name(CHANNEL)
                       + "="
                       + sid
                       + "\r\nContent-Type: application/json\r\nContent-Length: "
@@ -152,7 +154,7 @@ class ProxyTransportTest {
                           + " HTTP/1.1\r\nHost: localhost:"
                           + port
                           + "\r\nCookie: "
-                          + SessionCookies.NAME
+                          + SessionCookies.name(CHANNEL)
                           + "="
                           + sid
                           + "\r\nConnection: close\r\n\r\n")
@@ -168,22 +170,22 @@ class ProxyTransportTest {
   }
 
   @Test
-  void optionsAndDirectErrorAre404ButServletErrorDispatchRetainsStatus() throws Exception {
+  void optionsReturn405AndServletErrorDispatchRetainsStatus() throws Exception {
     for (String path :
         new String[] {
           "/api/chat",
           "/api/chat/threads",
           "/api/chat/threads/thread/messages",
           "/api/chat/threads/thread/artifacts/a",
-          "/api/chat/threads/thread/tools/tool"
+          "/api/chat/threads/thread/tools/tool/data"
         }) {
       var request =
           HttpRequest.newBuilder(URI.create(origin + path))
               .method("OPTIONS", HttpRequest.BodyPublishers.noBody())
               .build();
       var response = HttpProbe.HTTP.send(request, HttpResponse.BodyHandlers.ofString());
-      assertThat(response.statusCode()).isEqualTo(404);
-      assertThat(response.body()).contains("NOT_FOUND");
+      assertThat(response.statusCode()).isEqualTo(405);
+      assertThat(response.body()).contains("METHOD_NOT_ALLOWED");
     }
     client
         .get()
@@ -317,7 +319,7 @@ class ProxyTransportTest {
         client
             .get()
             .uri("/api/chat/threads/thread/artifacts/a?cursor=a%20b&x=1&x=2")
-            .cookie(SessionCookies.NAME, sid)
+            .cookie(SessionCookies.name(CHANNEL), sid)
             .exchange()
             .expectStatus()
             .isEqualTo(502);
@@ -326,7 +328,7 @@ class ProxyTransportTest {
     assertThat(response.response.headers().allValues("Set-Cookie")).hasSize(2);
     assertThat(response.response.headers().allValues("X-Hop")).isEmpty();
     assertThat(BACKEND.takeRequest(2, TimeUnit.SECONDS).getPath())
-        .isEqualTo("/internal/v1/chat/threads/thread/artifacts/a?cursor=a%20b&x=1&x=2");
+        .isEqualTo("/api/chat/threads/thread/artifacts/a?cursor=a%20b&x=1&x=2");
   }
 
   @Test
@@ -334,7 +336,7 @@ class ProxyTransportTest {
     String query = "flag&empty=&x=a+b&x=a%20b&encoded=%2F%26%3D";
     String body = "message=a+b&message=a%20b&opaque=%2F%26%3D";
     BACKEND.enqueue(new MockResponse().setBody("ok"));
-    post("/api/chat/threads/thread/tools/tool?" + query)
+    post("/api/chat/threads/thread/tools/tool/data?" + query)
         .header("Content-Type", "application/x-www-form-urlencoded")
         .bodyValue(body)
         .exchange()
@@ -342,8 +344,7 @@ class ProxyTransportTest {
         .isOk()
         .getResponseBody();
     var upstream = BACKEND.takeRequest(2, TimeUnit.SECONDS);
-    assertThat(upstream.getPath())
-        .isEqualTo("/internal/v1/chat/threads/thread/tools/tool?" + query);
+    assertThat(upstream.getPath()).isEqualTo("/api/chat/threads/thread/tools/tool/data?" + query);
     assertThat(upstream.getBody().readUtf8()).isEqualTo(body);
   }
 
@@ -354,7 +355,7 @@ class ProxyTransportTest {
         client
             .get()
             .uri("/api/chat/threads/thread/artifacts/a")
-            .cookie(SessionCookies.NAME, sid)
+            .cookie(SessionCookies.name(CHANNEL), sid)
             .header("If-None-Match", "\"v1\"")
             .exchange()
             .expectStatus()
@@ -367,7 +368,7 @@ class ProxyTransportTest {
     client
         .get()
         .uri("/api/chat/threads/thread/artifacts/a")
-        .cookie(SessionCookies.NAME, sid)
+        .cookie(SessionCookies.name(CHANNEL), sid)
         .header("If-None-Match", "\"v1\"")
         .exchange()
         .expectStatus()
@@ -384,10 +385,9 @@ class ProxyTransportTest {
     assertThat(BACKEND.takeRequest(2, TimeUnit.SECONDS).getBodySize()).isEqualTo(1048576);
     post("/api/chat").bodyValue(exact + " ").exchange().expectStatus().isEqualTo(400);
     var request =
-        HttpRequest.newBuilder(URI.create(origin + "/api/chat"))
+        HttpRequest.newBuilder(URI.create(origin + "/api/chat?channelId=" + CHANNEL))
             .header("Origin", origin)
-            .header("Cookie", SessionCookies.NAME + "=" + sid)
-            .header("Idempotency-Key", "chunked")
+            .header("Cookie", SessionCookies.name(CHANNEL) + "=" + sid)
             .POST(
                 HttpRequest.BodyPublishers.ofInputStream(
                     () ->
@@ -398,7 +398,7 @@ class ProxyTransportTest {
         .isEqualTo(400);
     assertThat(BACKEND.takeRequest(50, TimeUnit.MILLISECONDS)).isNull();
     BACKEND.enqueue(new MockResponse().setBody("ok"));
-    post("/api/chat/threads/thread/tools/tool")
+    post("/api/chat/threads/thread/tools/tool/data")
         .bodyValue(exact + " ")
         .exchange()
         .expectStatus()
@@ -515,17 +515,17 @@ class ProxyTransportTest {
 
   @Test
   void routingErrorsAndDuplicateCookiesKeepWireContract() {
-    for (String path : new String[] {"/api/chat", "/api/chat/threads/thread/tools/tool"})
+    for (String path : new String[] {"/api/chat", "/api/chat/threads/thread/tools/tool/data"})
       client
           .get()
           .uri(path)
           .exchange()
           .expectStatus()
-          .isNotFound()
+          .isEqualTo(405)
           .expectBody()
           .jsonPath("$.error.message")
           .isEqualTo("");
-    post("/api/chat/threads").exchange().expectStatus().isNotFound();
+    post("/api/chat/threads").exchange().expectStatus().isEqualTo(405);
     post("/api/auth/session/reset").exchange().expectStatus().isNotFound();
     client
         .get()
@@ -536,7 +536,7 @@ class ProxyTransportTest {
         .expectHeader()
         .doesNotExist("Set-Cookie");
     post("/api/auth/session")
-        .cookie(SessionCookies.NAME, sid)
+        .cookie(SessionCookies.name(CHANNEL), sid)
         .exchange()
         .expectStatus()
         .isUnauthorized();

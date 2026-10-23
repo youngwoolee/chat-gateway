@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -24,11 +23,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.util.Map;
-import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
@@ -40,14 +37,7 @@ class SessionAuthenticationTest {
   final LocalAuthorityStore store = new LocalAuthorityStore();
   final PfcClient platform = mock(PfcClient.class);
   final SessionSettings settings =
-      new SessionSettings(
-          Duration.ofMinutes(5),
-          Duration.ofMinutes(10),
-          "shinhancard.com",
-          "/",
-          "out",
-          "in",
-          Set.of("demo"));
+      new SessionSettings(Duration.ofMinutes(5), "shinhancard.com", "/");
   long now = 1000;
   Clock clock =
       new Clock() {
@@ -67,7 +57,7 @@ class SessionAuthenticationTest {
 
   @BeforeEach
   void setup() {
-    when(platform.homepage(any(), any()))
+    when(platform.homepage(any()))
         .thenReturn(new PfcClient.IdentityCookies("CBA", "ticket", "proof"));
     auth = service(store);
   }
@@ -86,32 +76,19 @@ class SessionAuthenticationTest {
   String guest() {
     String sid = Credentials.random();
     store.create(
-        new Session(
-            Credentials.hash(sid),
-            "guest",
-            "GUEST",
-            "channel",
-            "ACTIVE",
-            0,
-            300000,
-            null,
-            "thread"),
+        new Session(Credentials.hash(sid), "guest", "GUEST", "channel", "ACTIVE", 0, 300000, null),
         null);
     return sid;
   }
 
   Exchange request(String sid, boolean identity) {
-    var builder =
-        MockMvcRequestBuilders.post("https://chat/api/chat?channelId=channel")
-            .header("Idempotency-Key", "key");
-    if (sid != null) builder.cookie(new Cookie(SessionCookies.NAME, sid));
+    var builder = MockMvcRequestBuilders.post("https://chat/api/chat?channelId=channel");
+    if (sid != null) builder.cookie(new Cookie(SessionCookies.name("channel"), sid));
     if (identity)
-      builder
-          .header("X-Requested-Login", "true")
-          .cookie(
-              new Cookie("PlatformSystemCode_O", "DEMO"),
-              new Cookie("PlatformAuthentication_O", "ticket"),
-              new Cookie("PlatformVerify_O", "proof"));
+      builder.cookie(
+          new Cookie("PlatformSystemCode_O", "DEMO"),
+          new Cookie("PlatformAuthentication_O", "ticket"),
+          new Cookie("PlatformVerify_O", "proof"));
     return Exchange.from(builder);
   }
 
@@ -119,70 +96,31 @@ class SessionAuthenticationTest {
   void cookieLossRequiresFreshIdentityAndNeverRestoresGuestOwnership() {
     String sid = guest();
     var previous = store.find(Credentials.hash(sid));
-    when(platform.authenticate(any(), any())).thenReturn("member");
+    when(platform.authenticate(any())).thenReturn("P123456789");
     var memberRequest = request(null, true);
-    memberRequest.getRequest().setQueryString("channelId=channel&threadId=thread");
     var member = createOrReuse(auth, memberRequest);
-    assertThat(member.threadId()).isEqualTo("thread");
-    assertThat(member.subject()).isEqualTo("member");
+    assertThat(member.subject()).isEqualTo("P123456789");
     assertThat(member.guestSubject()).isNull();
     assertThat(member.idHash()).isNotEqualTo(previous.idHash());
     var guestRequest = request(null, false);
-    guestRequest.getRequest().removeHeader("Idempotency-Key");
-    guestRequest.getRequest().addHeader("Idempotency-Key", "new-guest");
-    guestRequest.getRequest().setQueryString("channelId=channel&threadId=new-thread");
     var fresh = createOrReuse(auth, guestRequest);
-    assertThat(fresh.threadId()).isEqualTo("new-thread");
     assertThat(fresh.subject()).isNotEqualTo(previous.subject());
     assertThat(fresh.guestSubject()).isNull();
   }
 
   @Test
-  void differentThreadCannotPromoteOrExtendSession() {
-    String sid = guest();
-    var before = store.find(Credentials.hash(sid));
-    assertThatThrownBy(() -> authenticateActivity(auth, request(sid, true), "other-thread"))
-        .hasMessage("CONFLICT");
-    assertThat(store.find(Credentials.hash(sid))).isEqualTo(before);
-    verifyNoInteractions(platform);
-  }
-
-  @Test
   void promotionRotatesSessionAndPreservesTrustedGuestWithoutBackendCall() {
     String sid = guest();
-    when(platform.authenticate(any(), any())).thenReturn("member");
+    when(platform.authenticate(any())).thenReturn("P123456789");
     var e = request(sid, true);
-    var member = authenticateActivity(auth, e, "thread");
+    var member = createOrReuse(auth, e);
     assertThat(member.guestSubject()).isEqualTo("guest");
-    assertThat(member.threadId()).isEqualTo("thread");
-    assertThat(member.subject()).isEqualTo("member");
+    assertThat(member.subject()).isEqualTo("P123456789");
     assertThat(store.find(Credentials.hash(sid)).state()).isEqualTo("REVOKED");
-    assertThat(e.getResponse().getCookie(SessionCookies.NAME).getValue()).isNotEqualTo(sid);
-    assertThatThrownBy(() -> authenticateActivity(auth, request(sid, true), "thread"))
+    assertThat(e.getResponse().getCookie(SessionCookies.name("channel")).getValue())
+        .isNotEqualTo(sid);
+    assertThatThrownBy(() -> authenticateActivity(auth, request(sid, true)))
         .hasMessage("UNAUTHENTICATED");
-  }
-
-  @Test
-  void slowPlatformAuthenticationCannotReviveExpiredGuest() {
-    String sid = guest();
-    when(platform.authenticate(any(), any()))
-        .thenAnswer(
-            inv -> {
-              now = 300000;
-              return "member";
-            });
-    var e = request(sid, true);
-    assertThatThrownBy(() -> authenticateActivity(auth, e, "thread")).hasMessage("UNAUTHENTICATED");
-    assertThat(e.getResponse().getCookies()).isEmpty();
-  }
-
-  @Test
-  void statusNeverPromotesGuest() {
-    String sid = guest();
-    var e = request(sid, true);
-    assertThat(inspect(auth, e).userType()).isEqualTo("GUEST");
-    verifyNoInteractions(platform);
-    assertThat(store.find(Credentials.hash(sid)).expiresAt()).isEqualTo(300000);
   }
 
   @Test
@@ -191,63 +129,20 @@ class SessionAuthenticationTest {
     org.mockito.Mockito.doThrow(GatewayException.unavailable()).when(authority).checkAvailable();
     var unavailable = service(authority);
     var e = request(null, true);
-    when(platform.authenticate(any(), any()))
+    when(platform.authenticate(any()))
         .thenThrow(new AssertionError("Must not call platform authentication"));
     assertThatThrownBy(() -> createOrReuse(unavailable, e)).hasMessage("UNAVAILABLE");
     assertThat(e.getResponse().getCookies()).isEmpty();
   }
 
   @Test
-  void authenticationRetryDoesNotExtendNewSession() {
+  void sessionRequestsWithoutKeysExtendOrCreateSessions() {
     var e = request(null, false);
     Session created = createOrReuse(auth, e);
-    String sid = e.getResponse().getCookie(SessionCookies.NAME).getValue();
+    String sid = e.getResponse().getCookie(SessionCookies.name("channel")).getValue();
     now = 2000;
-    assertThat(createOrReuse(auth, request(sid, false)).expiresAt()).isEqualTo(created.expiresAt());
-    assertThatThrownBy(() -> createOrReuse(auth, request(null, false))).hasMessage("CONFLICT");
-  }
-
-  @ParameterizedTest
-  @CsvSource({
-    "create,partial",
-    "inspect,partial",
-    "activity,partial",
-    "create,duplicate",
-    "inspect,duplicate",
-    "activity,duplicate"
-  })
-  void memberIgnoresUnusableIdentityForEveryEntryPoint(String entry, String identity) {
-    String sid = Credentials.random();
-    store.create(
-        new Session(
-            Credentials.hash(sid),
-            "member",
-            "MEMBER",
-            "channel",
-            "ACTIVE",
-            0,
-            300000,
-            null,
-            "thread"),
-        null);
-    var builder =
-        MockMvcRequestBuilders.post("https://chat/api/auth/session")
-            .cookie(new Cookie(SessionCookies.NAME, sid), new Cookie("PlatformVerify_O", "bad"));
-    if (identity.equals("duplicate")) builder.cookie(new Cookie("PlatformVerify_O", "other"));
-    if (!entry.equals("inspect")) builder.header("Idempotency-Key", "key");
-    var exchange = Exchange.from(builder);
-    Session result =
-        switch (entry) {
-          case "create" -> createOrReuse(auth, exchange);
-          case "inspect" -> inspect(auth, exchange);
-          default -> authenticateActivity(auth, exchange, "thread");
-        };
-    assertThat(result.subject()).isEqualTo("member");
-    assertThat(result.idHash()).isEqualTo(Credentials.hash(sid));
-    assertThat(result.expiresAt()).isEqualTo(entry.equals("inspect") ? 300000 : now + 300000);
-    assertThat(exchange.getResponse().getCookie(SessionCookies.NAME)).isNull();
-    assertThat(exchange.getResponse().getCookies()).hasSize(entry.equals("inspect") ? 0 : 3);
-    verify(platform, org.mockito.Mockito.never()).authenticate(any(), any());
+    assertThat(createOrReuse(auth, request(sid, false)).expiresAt()).isEqualTo(302000);
+    assertThat(createOrReuse(auth, request(null, false)).idHash()).isNotEqualTo(created.idHash());
   }
 
   @Test
@@ -255,9 +150,9 @@ class SessionAuthenticationTest {
     String sid = guest();
     var exchange =
         Exchange.from(
-            MockMvcRequestBuilders.get("https://chat/api/auth/session")
+            MockMvcRequestBuilders.get("https://chat/api/auth/session?channelId=channel")
                 .cookie(
-                    new Cookie(SessionCookies.NAME, sid),
+                    new Cookie(SessionCookies.name("channel"), sid),
                     new Cookie("PlatformVerify_O", "bad"),
                     new Cookie("PlatformVerify_O", "duplicate")));
     Session before = store.find(Credentials.hash(sid));
@@ -269,45 +164,13 @@ class SessionAuthenticationTest {
   }
 
   @Test
-  void guestOnlyPromotesOnExplicitChatLogin() {
+  void startLoginPromotesAndEveryNewActivityExtendsSession() {
     String sid = guest();
-    var sessionRequest = request(sid, true);
-    assertThat(createOrReuse(auth, sessionRequest).userType()).isEqualTo("GUEST");
-    for (String flag : new String[] {"absent", "false"}) {
-      var chat = request(sid, true);
-      chat.getRequest().removeHeader("X-Requested-Login");
-      if (flag.equals("false")) chat.getRequest().addHeader("X-Requested-Login", flag);
-      assertThat(authenticateActivity(auth, chat, "thread").userType()).isEqualTo("GUEST");
-    }
-    var tool = request(sid, true);
-    tool.getRequest().setRequestURI("/api/chat/threads/thread/tools/tool");
-    assertThat(authenticateActivity(auth, tool, "thread").userType()).isEqualTo("GUEST");
-    verifyNoInteractions(platform);
-  }
-
-  @Test
-  void requestedLoginRequiresIdentityAndRejectsAmbiguousHeader() {
-    String sid = guest();
-    Session before = store.find(Credentials.hash(sid));
-    var missing = request(sid, false);
-    missing.getRequest().addHeader("X-Requested-Login", "true");
-    assertThatThrownBy(() -> authenticateActivity(auth, missing, "thread"))
-        .hasMessage("UNAUTHENTICATED");
-    var invalid = request(sid, true);
-    invalid.getRequest().addHeader("X-Requested-Login", "false");
-    assertThatThrownBy(() -> authenticateActivity(auth, invalid, "thread"))
-        .hasMessage("INVALID_ARGUMENT");
-    assertThat(store.find(Credentials.hash(sid))).isEqualTo(before);
-    verifyNoInteractions(platform);
-  }
-
-  @Test
-  void chatLoginPromotesWithoutThreadTransferAndRetryDoesNotExtend() {
-    String sid = guest();
-    when(platform.authenticate(any(), any())).thenReturn("member");
+    when(platform.authenticate(any())).thenReturn("P123456789");
     var exchange = request(sid, true);
-    Session member = authenticateActivity(auth, exchange, "thread");
-    String replacement = exchange.getResponse().getCookie(SessionCookies.NAME).getValue();
+    Session member = createOrReuse(auth, exchange);
+    String replacement =
+        exchange.getResponse().getCookie(SessionCookies.name("channel")).getValue();
     assertThat(replacement).isNotEqualTo(sid);
     assertThat(member.userType()).isEqualTo("MEMBER");
     assertThat(store.find(Credentials.hash(sid)).state()).isEqualTo("REVOKED");
@@ -319,26 +182,9 @@ class SessionAuthenticationTest {
       assertThat(deleted.getPath()).isEqualTo("/");
     }
     now = 2000;
-    assertThat(createOrReuse(auth, request(replacement, false)).expiresAt())
-        .isEqualTo(member.expiresAt());
-    assertThat(authenticateActivity(auth, request(replacement, false), "thread").expiresAt())
-        .isEqualTo(member.expiresAt());
-  }
-
-  @Test
-  void postSessionRecreatesNaturallyExpiredActiveButActivityRejectsIt() {
-    String sid = guest();
-    now = 300000;
-    var chat = request(sid, true);
-    assertThatThrownBy(() -> authenticateActivity(auth, chat, "thread"))
-        .hasMessage("UNAUTHENTICATED");
-    assertThat(chat.getResponse().getCookies()).isEmpty();
-    var create = request(sid, false);
-    Session replacement = createOrReuse(auth, create);
-    assertThat(replacement.idHash()).isNotEqualTo(Credentials.hash(sid));
-    assertThat(replacement.expiresAt()).isEqualTo(600000);
-    assertThat(replacement.userType()).isEqualTo("GUEST");
-    verifyNoInteractions(platform);
+    assertThat(createOrReuse(auth, request(replacement, false)).expiresAt()).isEqualTo(302000);
+    assertThat(authenticateActivity(auth, request(replacement, false)).expiresAt())
+        .isEqualTo(302000);
   }
 
   @ParameterizedTest
@@ -348,21 +194,12 @@ class SessionAuthenticationTest {
         state.equals("missing") ? null : state.equals("unknown") ? Credentials.random() : guest();
     if (state.equals("revoked")) store.revoke(Credentials.hash(sid));
     var exchange = request(sid, true);
-    assertThatThrownBy(() -> authenticateActivity(auth, exchange, "thread"))
-        .hasMessage("UNAUTHENTICATED");
+    assertThatThrownBy(() -> authenticateActivity(auth, exchange)).hasMessage("UNAUTHENTICATED");
     if (!state.equals("missing"))
-      assertThatThrownBy(() -> createOrReuse(auth, exchange)).hasMessage("UNAUTHENTICATED");
+      assertThatThrownBy(() -> createOrReuse(auth, request(sid, false)))
+          .hasMessage("UNAUTHENTICATED");
     assertThat(exchange.getResponse().getCookies()).isEmpty();
     verifyNoInteractions(platform);
-  }
-
-  @Test
-  void failedPlatformAuthenticationLeavesGuestActive() {
-    String sid = guest();
-    when(platform.authenticate(any(), any())).thenThrow(GatewayException.unauthorized());
-    assertThatThrownBy(() -> authenticateActivity(auth, request(sid, true), "thread"))
-        .hasMessage("UNAUTHENTICATED");
-    assertThat(store.find(Credentials.hash(sid)).state()).isEqualTo("ACTIVE");
   }
 
   @Test
@@ -385,7 +222,90 @@ class SessionAuthenticationTest {
     e.getRequest().setQueryString("channelId=%63hannel");
     assertThat(inspect(auth, e).channel()).isEqualTo("channel");
     e.getRequest().setQueryString("channelId");
-    assertThat(inspect(auth, e).channel()).isEqualTo("channel");
+    assertThatThrownBy(() -> inspect(auth, e)).hasMessage("INVALID_ARGUMENT");
+  }
+
+  @Test
+  void startPrioritizesIdentityAndFallsBackOnlyForLoginFailures() {
+    for (var error :
+        java.util.List.of(
+            GatewayException.unauthorized(),
+            GatewayException.unavailable(),
+            new IllegalStateException("PFC"))) {
+      org.mockito.Mockito.doThrow(error).when(platform).authenticate(any());
+      var exchange = request(guest(), true);
+      Session created = createOrReuse(auth, exchange);
+      assertThat(created.userType()).isEqualTo("GUEST");
+      assertThat(created.subject()).matches("G[0-9]{12}");
+      assertThat(exchange.getResponse().getCookie(SessionCookies.name("channel"))).isNotNull();
+    }
+    org.mockito.Mockito.doReturn("P123456789").when(platform).authenticate(any());
+    var exchange = request(guest(), true);
+    assertThat(createOrReuse(auth, exchange).userType()).isEqualTo("MEMBER");
+  }
+
+  @Test
+  void partialIdentityAndInvalidPidCreateGuest() {
+    var partial = request(null, false);
+    partial.getRequest().setCookies(new Cookie("PlatformVerify_O", "only-one"));
+    assertThat(createOrReuse(auth, partial).userType()).isEqualTo("GUEST");
+    verifyNoInteractions(platform);
+    for (String invalid : new String[] {"member", "P123", "P1234567890", "G123456789"}) {
+      when(platform.authenticate(any())).thenReturn(invalid);
+      assertThat(createOrReuse(auth, request(null, true)).userType()).isEqualTo("GUEST");
+    }
+  }
+
+  @Test
+  void expiredSessionIsDeletedInsteadOfRecreatedWithoutIdentity() {
+    String sid = guest();
+    now = 300000;
+    for (String operation : new String[] {"start", "inspect", "activity"}) {
+      var exchange = request(sid, false);
+      assertThatThrownBy(
+              () -> {
+                switch (operation) {
+                  case "start" -> createOrReuse(auth, exchange);
+                  case "inspect" -> inspect(auth, exchange);
+                  default -> authenticateActivity(auth, exchange);
+                }
+              })
+          .hasMessage("UNAUTHENTICATED");
+      assertThat(exchange.getResponse().getCookie(SessionCookies.name("channel")).getMaxAge())
+          .isZero();
+    }
+    verifyNoInteractions(platform);
+    when(platform.authenticate(any())).thenReturn("P123456789");
+    assertThat(createOrReuse(auth, request(sid, true)).userType()).isEqualTo("MEMBER");
+  }
+
+  @Test
+  void chatNeverUsesPlatformLogin() {
+    String sid = guest();
+    var exchange = request(sid, true);
+    assertThat(authenticateActivity(auth, exchange).userType()).isEqualTo("GUEST");
+    assertThat(exchange.getResponse().getHeader("X-Chat-User-Type")).isEqualTo("GUEST");
+    verifyNoInteractions(platform);
+  }
+
+  @Test
+  void atomicExpiryDuringTouchClearsCookieAndPreviouslySetIdentityHeaders() {
+    String sid = guest();
+    var authority = mock(AuthorityStore.class);
+    when(authority.find(Credentials.hash(sid))).thenReturn(store.find(Credentials.hash(sid)));
+    when(authority.touch(
+            org.mockito.ArgumentMatchers.eq(Credentials.hash(sid)),
+            org.mockito.ArgumentMatchers.anyLong(),
+            org.mockito.ArgumentMatchers.anyLong(),
+            org.mockito.ArgumentMatchers.isNull()))
+        .thenThrow(GatewayException.unauthorized());
+    var exchange = request(sid, false);
+    assertThatThrownBy(() -> authenticateActivity(service(authority), exchange))
+        .hasMessage("UNAUTHENTICATED");
+    assertThat(exchange.getResponse().getCookie(SessionCookies.name("channel")).getMaxAge())
+        .isZero();
+    assertThat(exchange.getResponse().getHeader("X-Chat-User-Type")).isNull();
+    assertThat(exchange.getResponse().getHeader("X-Chat-Auth-Expires-At")).isNull();
   }
 
   record Exchange(MockHttpServletRequest getRequest, MockHttpServletResponse getResponse) {
@@ -403,7 +323,7 @@ class SessionAuthenticationTest {
     return service.inspect(e.getRequest(), e.getResponse());
   }
 
-  Session authenticateActivity(SessionAuthentication service, Exchange e, String thread) {
-    return service.authenticateActivity(e.getRequest(), e.getResponse(), thread);
+  Session authenticateActivity(SessionAuthentication service, Exchange e) {
+    return service.authenticateActivity(e.getRequest(), e.getResponse());
   }
 }

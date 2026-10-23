@@ -1,15 +1,13 @@
 @baseUrl = http://[::1]:8080
-@stagingChannel = 00000000-0000-0000-0000-000000000002
+@stagingChannel = 00000002-0000-0000-0000-000000000002
 
 ### staging 게스트는 403 (새 세션 발급 없음)
 # @no-cookie-jar
 POST {{baseUrl}}/api/auth/session?channelId={{stagingChannel}}
 Origin: {{baseUrl}}
-Idempotency-Key: staging-guest-test
 
-### local-member는 허용. DEMO 티켓 재시도에는 동일 키 사용
+### P000000001는 허용. DEMO 티켓은 offline 전용 고정 입력
 # @no-cookie-jar
 POST {{baseUrl}}/api/auth/session?channelId={{stagingChannel}}
 Origin: {{baseUrl}}
-Idempotency-Key: staging-member-test
 Cookie: PlatformSystemCode_O=DEMO; PlatformAuthentication_O=demo-ticket; PlatformVerify_O=demo-proof

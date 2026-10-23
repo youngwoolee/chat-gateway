@@ -2,13 +2,10 @@ package com.example.chatgateway.session;
 
 import com.example.chatgateway.exception.GatewayException;
 import java.nio.charset.StandardCharsets;
-import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.util.Base64;
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
 
 public final class Credentials {
   private static final SecureRandom RANDOM = new SecureRandom();
@@ -23,20 +20,6 @@ public final class Credentials {
     return Base64.getUrlEncoder().withoutPadding().encodeToString(b);
   }
 
-  /** 응답 유실 재시도에도 같은 SID를 재현한다. 이전 SID를 HMAC 비밀키로 사용하며 원문을 저장하지 않는다. */
-  public static String restartSid(String sid, String key, String threadId) {
-    try {
-      Mac mac = Mac.getInstance("HmacSHA256");
-      mac.init(new SecretKeySpec(Base64.getUrlDecoder().decode(opaque(sid)), "HmacSHA256"));
-      String message = "session-restart:" + key.length() + ":" + key + ":" + threadId;
-      return Base64.getUrlEncoder()
-          .withoutPadding()
-          .encodeToString(mac.doFinal(message.getBytes(StandardCharsets.UTF_8)));
-    } catch (GeneralSecurityException e) {
-      throw new IllegalStateException(e);
-    }
-  }
-
   /** 원문 대신 저장하거나 동일 입력을 대조할 SHA-256/base64url 값을 계산한다. */
   public static String hash(String value) {
     try {
@@ -47,6 +30,14 @@ public final class Credentials {
     } catch (NoSuchAlgorithmException e) {
       throw new IllegalStateException(e);
     }
+  }
+
+  /** 게스트 ID 발급은 세션 서비스 책임이며 G/W는 합의된 접두사·길이·헤더 안전성만 확인한다. */
+  public static boolean isGuestId(String value) {
+    return value != null
+        && value.length() == 13
+        && value.startsWith("G")
+        && value.chars().allMatch(c -> c >= 33 && c <= 126);
   }
 
   /** 32바이트 base64url 자격증명의 길이·문자 형식을 검사한다. 실제 존재·권한·만료는 저장소에서 별도로 확인한다. */
@@ -60,14 +51,5 @@ public final class Credentials {
     if (value == null || !value.matches("[A-Za-z0-9._:-]{1,128}"))
       throw GatewayException.badRequest();
     return value;
-  }
-
-  /** 비어 있지 않은 설정값과 전달값을 MessageDigest.isEqual로 비교한다. */
-  public static boolean matches(String expected, String actual) {
-    return expected != null
-        && !expected.isBlank()
-        && actual != null
-        && MessageDigest.isEqual(
-            expected.getBytes(StandardCharsets.UTF_8), actual.getBytes(StandardCharsets.UTF_8));
   }
 }

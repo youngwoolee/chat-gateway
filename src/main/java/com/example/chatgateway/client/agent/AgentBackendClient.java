@@ -5,6 +5,9 @@ import com.example.chatgateway.config.StagingProperties;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.stream.Collectors;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpHeaders;
@@ -12,6 +15,7 @@ import org.springframework.http.client.ClientHttpResponse;
 import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.util.UriUtils;
 
 /** Agent B/E에 HTTP 요청을 보내며, 응답 연결은 소비자가 닫는다. */
 @Component
@@ -57,11 +61,20 @@ public class AgentBackendClient {
   /** 채널은 인증된 세션에서만 받는다. 경로와 query를 다시 인코딩하지 않는다. */
   public URI target(String channel, String path, String query) {
     String base = staging.channels().getOrDefault(channel, properties.backend().baseUrl());
+    String upstreamQuery =
+        query == null
+            ? ""
+            : Arrays.stream(query.split("&", -1))
+                .filter(
+                    part ->
+                        !"channelId"
+                            .equals(UriUtils.decode(part.split("=", 2)[0], StandardCharsets.UTF_8)))
+                .collect(Collectors.joining("&"));
     return URI.create(
         base.replaceAll("/+$", "")
-            + "/internal/v1/chat"
+            + "/api/chat"
             + path
-            + (query == null ? "" : "?" + query));
+            + (upstreamQuery.isEmpty() ? "" : "?" + upstreamQuery));
   }
 
   /** B/E 오류 응답도 그대로 반환한다. SSE 연결은 소비가 끝난 뒤 서비스가 닫는다. */

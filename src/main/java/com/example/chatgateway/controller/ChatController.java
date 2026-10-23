@@ -29,7 +29,7 @@ public class ChatController {
   }
 
   /** 도구 실행은 발화 JSON 검증과 구분하여 전달한다. */
-  @PostMapping("/api/chat/threads/{threadId}/tools/{tool}")
+  @PostMapping("/api/chat/threads/{threadId}/tools/{toolName}/{toolRoute}")
   public SseEmitter tool(
       HttpServletRequest request, HttpServletResponse response, @PathVariable String threadId)
       throws Exception {
@@ -52,9 +52,16 @@ public class ChatController {
 
   /** 명시적으로 공개한 경로·메서드 외에는 자동 OPTIONS/중계로 확장하지 않는다. */
   @RequestMapping(
-      path = {"/api/chat", "/api/chat/**"},
+      path = {
+        "/api/chat",
+        "/api/chat/auto",
+        "/api/chat/threads",
+        "/api/chat/threads/{threadId}/messages",
+        "/api/chat/threads/{threadId}/artifacts/{artifactId}",
+        "/api/chat/threads/{threadId}/tools/{toolName}/{toolRoute}"
+      },
       method = {RequestMethod.OPTIONS, RequestMethod.HEAD})
-  public void notFound() {
-    throw new GatewayException(404, "NOT_FOUND");
+  public void methodNotAllowed() {
+    throw new GatewayException(405, "METHOD_NOT_ALLOWED");
   }
 }

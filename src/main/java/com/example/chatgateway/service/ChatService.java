@@ -2,9 +2,8 @@ package com.example.chatgateway.service;
 
 import com.example.chatgateway.client.agent.AgentBackendClient;
 import com.example.chatgateway.client.agent.BackendHeaders;
-import com.example.chatgateway.client.pfc.PfcClient.MfaResult;
+import com.example.chatgateway.client.pfc.PfcClient.MfaInput;
 import com.example.chatgateway.config.ChatProperties;
-import com.example.chatgateway.config.SessionSettings;
 import com.example.chatgateway.exception.GatewayException;
 import com.example.chatgateway.gateway.MfaResultParser;
 import com.example.chatgateway.service.ChatAuthenticationService.AuthenticatedChat;
@@ -18,7 +17,6 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.net.URI;
 import java.util.Collections;
-import java.util.List;
 import java.util.concurrent.Semaphore;
 import java.util.function.Function;
 import org.springframework.http.MediaType;
@@ -35,7 +33,6 @@ public class ChatService {
   private final BackendHeaders headers;
   private final SseRelayService streams;
   private final ObjectMapper mapper;
-  private final SessionSettings settings;
   private final Semaphore admission;
 
   public ChatService(
@@ -45,7 +42,6 @@ public class ChatService {
       BackendHeaders headers,
       SseRelayService streams,
       ObjectMapper mapper,
-      SessionSettings settings,
       ChatProperties properties) {
     this.authentication = authentication;
     this.mfaParser = mfaParser;
@@ -53,7 +49,6 @@ public class ChatService {
     this.headers = headers;
     this.streams = streams;
     this.mapper = mapper;
-    this.settings = settings;
     admission = new Semaphore(properties.backend().maxStreams());
   }
 
@@ -61,11 +56,11 @@ public class ChatService {
   public SseEmitter chat(HttpServletRequest request, HttpServletResponse response)
       throws Exception {
     byte[] body = readChatBody(request);
+    thread(body);
     var results = mfaParser.parse(Collections.list(request.getHeaders("X-Mfa-Result")));
     return send(
         request,
         response,
-        thread(body),
         body,
         results,
         authenticated ->
@@ -77,13 +72,13 @@ public class ChatService {
   public SseEmitter tool(HttpServletRequest request, HttpServletResponse response, String threadId)
       throws Exception {
     rejectMfa(request);
+    Credentials.identifier(threadId);
     var body = request.getInputStream();
     return send(
         request,
         response,
-        Credentials.identifier(threadId),
         null,
-        List.of(),
+        null,
         authenticated ->
             backend.executeTool(
                 target(request, authenticated),
@@ -98,13 +93,8 @@ public class ChatService {
     acquire(request);
     try {
       rejectMfa(request);
-      var authenticated =
-          authentication.authenticate(
-              request,
-              response,
-              threadId == null ? null : Credentials.identifier(threadId),
-              null,
-              List.of());
+      if (threadId != null) Credentials.identifier(threadId);
+      var authenticated = authentication.authenticate(request, response, null, null);
       try (var upstream =
           backend.history(
               target(request, authenticated), headers.request(request, authenticated))) {
@@ -125,16 +115,15 @@ public class ChatService {
   private SseEmitter send(
       HttpServletRequest request,
       HttpServletResponse response,
-      String threadId,
       byte[] body,
-      List<MfaResult> results,
+      MfaInput results,
       Function<AuthenticatedChat, AgentBackendClient.Response> call)
       throws Exception {
     acquire(request);
     AgentBackendClient.Response upstream = null;
     boolean streaming = false;
     try {
-      var authenticated = authentication.authenticate(request, response, threadId, body, results);
+      var authenticated = authentication.authenticate(request, response, body, results);
       upstream = call.apply(authenticated);
       copyHeaders(response, upstream);
       MediaType type = upstream.headers().getContentType();
@@ -168,8 +157,7 @@ public class ChatService {
   private void acquire(HttpServletRequest request) {
     if (request.getDispatcherType() != DispatcherType.REQUEST)
       throw new GatewayException(404, "NOT_FOUND");
-    if (settings.backendCredential().isBlank() || !admission.tryAcquire())
-      throw GatewayException.unavailable();
+    if (!admission.tryAcquire()) throw GatewayException.unavailable();
   }
 
   /** 발화 JSON에만 크기 제한을 적용한다. */
@@ -181,7 +169,7 @@ public class ChatService {
   }
 
   private void rejectMfa(HttpServletRequest request) {
-    if (!mfaParser.parse(Collections.list(request.getHeaders("X-Mfa-Result"))).isEmpty())
+    if (mfaParser.parse(Collections.list(request.getHeaders("X-Mfa-Result"))) != null)
       throw GatewayException.badRequest();
   }
 

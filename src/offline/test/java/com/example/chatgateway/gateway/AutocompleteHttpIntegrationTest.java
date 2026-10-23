@@ -64,19 +64,18 @@ class AutocompleteHttpIntegrationTest {
             "ACTIVE",
             now - 1000,
             expired ? now - 1 : now + 60000,
-            null,
-            "thread"),
+            null),
         null);
     return sid;
   }
 
   HttpProbe.Request request(String sid) {
     String origin = "http://localhost:" + port;
-    return new HttpProbe(origin)
+    return new HttpProbe(origin, SessionHttpIntegrationTest.CHANNEL)
         .post()
         .uri("/api/chat/auto")
         .header("Origin", origin)
-        .cookie(SessionCookies.NAME, sid);
+        .cookie(SessionCookies.name(SessionHttpIntegrationTest.CHANNEL), sid);
   }
 
   @Test

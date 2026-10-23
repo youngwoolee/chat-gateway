@@ -5,7 +5,6 @@ import com.example.chatgateway.client.pfc.MockPfcClient;
 import com.example.chatgateway.client.pfc.PfcClient;
 import com.example.chatgateway.session.AuthorityStore;
 import com.example.chatgateway.session.LocalAuthorityStore;
-import java.time.Clock;
 import java.util.Map;
 import java.util.Set;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -35,8 +34,8 @@ public class OfflineConfiguration {
 
   /** 실제 PFC를 호출하지 않고 합성 인증 자료만 처리한다. */
   @Bean
-  PfcClient offlinePlatform(Clock clock) {
-    return new MockPfcClient(clock);
+  PfcClient offlinePlatform() {
+    return new MockPfcClient();
   }
 
   /** DB 대신 offline 설정의 고객 목록으로만 권한을 확인한다. */

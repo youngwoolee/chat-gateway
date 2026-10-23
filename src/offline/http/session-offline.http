@@ -5,61 +5,54 @@
 # 쿠키 jar 대신 명시적으로 Cookie를 전송하여 local HTTP에서도 Secure 쿠키를 테스트합니다.
 # 브라우저의 Secure/HttpOnly 동작을 완화하는 설정은 아닙니다.
 # 기존 localhost 테스트 쿠키가 있다면 IDEA의 HTTP Client cookie jar에서 먼저 제거하세요.
-# 로그인 fixture는 demo-ticket 하나입니다. 다른 키로 이미 소비했으면 앱 재시작 후 실행하세요.
+# 로그인 fixture는 반복 사용 가능한 offline 전용 demo-ticket입니다.
 # 5분 넘게 쉬면 세션이 만료됩니다. 전체 재실행 시 새 게스트부터 시작하세요.
 
 ### 1. 새 게스트 세션 생성 → shSession 저장 (200 / GUEST)
 # @no-cookie-jar
-POST {{baseUrl}}/api/auth/session?channelId={{channelId}}&threadId={{threadId}}
+POST {{baseUrl}}/api/auth/session?channelId={{channelId}}
 Origin: {{baseUrl}}
-Idempotency-Key: {{$uuid}}
 
 > {%
     client.test("인증 성공", function () { client.assert(response.status === 200); });
     const cookie = response.headers.valuesOf("Set-Cookie")
-        .find(value => value.startsWith("__Host-sh-session="));
+        .find(value => value.startsWith(request.variables.get("sessionCookie") + "="));
     client.assert(cookie, "세션 Set-Cookie가 필요합니다");
-    const sid = cookie.split(";")[0].substring("__Host-sh-session=".length);
+    const sid = cookie.split(";")[0].substring(request.variables.get("sessionCookie").length + 1);
     client.assert(/^[A-Za-z0-9_-]{43}$/.test(sid), "발급된 세션 ID 형식이 올바르지 않습니다");
     client.global.set("shSession", sid);
-    client.global.set("threadId", response.body.threadId);
     client.log("shSession 저장 완료 (세션 원문은 출력하지 않음)");
 %}
 
-### 3. 게스트 → 회원 전환 채팅 (B/E 필요, SSE 응답, shSession 교체)
-# GW는 세션만 교체합니다. 대화 연결은 이후 요청의 신원 헤더를 보고 B/E가 처리합니다.
-# 회원 전환은 기존 threadId를 유지합니다. 새 대화는 restart로 새 threadId를 전달하세요.
-# mock 티켓의 동일 재시도 키를 유지합니다. 운영 플랫폼 자격증명이 아닙니다.
+### 2. _O로 start 로그인 (200 / MEMBER, shSession 교체)
+# 대화 ID는 FE가 생성하고 유지합니다. start는 대화 ID를 반환하지 않습니다.
+# mock 티켓은 운영 플랫폼 자격증명이 아닙니다.
 # @no-cookie-jar
-POST {{baseUrl}}/api/chat
+POST {{baseUrl}}/api/auth/session?channelId={{channelId}}
 Origin: {{baseUrl}}
-X-Requested-Login: true
 Content-Type: application/json
-Idempotency-Key: http-local-platform-login
-Cookie: __Host-sh-session={{shSession}}; PlatformSystemCode_O=DEMO; PlatformAuthentication_O=demo-ticket; PlatformVerify_O=demo-proof
+Cookie: {{sessionCookie}}={{shSession}}; PlatformSystemCode_O=DEMO; PlatformAuthentication_O=demo-ticket; PlatformVerify_O=demo-proof
 
-{"threadId":"{{threadId}}","text":"로그인 후 대화 계속"}
 
 > {%
     client.test("인증 성공", function () { client.assert(response.status === 200); });
     const cookie = response.headers.valuesOf("Set-Cookie")
-        .find(value => value.startsWith("__Host-sh-session="));
+        .find(value => value.startsWith(request.variables.get("sessionCookie") + "="));
     client.assert(cookie, "세션 Set-Cookie가 필요합니다");
-    const sid = cookie.split(";")[0].substring("__Host-sh-session=".length);
+    const sid = cookie.split(";")[0].substring(request.variables.get("sessionCookie").length + 1);
     client.assert(/^[A-Za-z0-9_-]{43}$/.test(sid), "발급된 세션 ID 형식이 올바르지 않습니다");
     client.global.set("shSession", sid);
     client.log("shSession 저장 완료 (세션 원문은 출력하지 않음)");
 %}
 
-### 4. 유효 회원 세션 우선 확인 (잘못된 _O가 있어도 200 / MEMBER)
+### 3. _O 없는 유효 회원 세션 재사용 (200 / MEMBER)
 # @no-cookie-jar
-POST {{baseUrl}}/api/auth/session?channelId={{channelId}}&threadId={{threadId}}
+POST {{baseUrl}}/api/auth/session?channelId={{channelId}}
 Origin: {{baseUrl}}
-Idempotency-Key: {{$uuid}}
-Cookie: __Host-sh-session={{shSession}}; PlatformVerify_O=invalid-but-ignored
+Cookie: {{sessionCookie}}={{shSession}}
 
 > {%
-    client.test("회원 세션 우선", function () {
+    client.test("회원 세션 재사용", function () {
         client.assert(response.status === 200);
         client.assert(response.body.userType === "MEMBER");
         client.assert(response.headers.valuesOf("Set-Cookie").length === 3);
@@ -68,10 +61,9 @@ Cookie: __Host-sh-session={{shSession}}; PlatformVerify_O=invalid-but-ignored
 
 ### 6. 잘못된 세션 거절 (401, 쿠키 일괄 삭제 없음)
 # @no-cookie-jar
-POST {{baseUrl}}/api/auth/session
+POST {{baseUrl}}/api/auth/session?channelId={{channelId}}
 Origin: {{baseUrl}}
-Idempotency-Key: {{$uuid}}
-Cookie: __Host-sh-session=malformed
+Cookie: {{sessionCookie}}=malformed
 
 > {%
     client.test("잘못된 세션", function () {
@@ -83,42 +75,11 @@ Cookie: __Host-sh-session=malformed
 
 ### 7. 다른 Origin 변경 요청 거절 (403)
 # @no-cookie-jar
-POST {{baseUrl}}/api/auth/session
+POST {{baseUrl}}/api/auth/session?channelId={{channelId}}
 Origin: https://other.example
-Idempotency-Key: {{$uuid}}
-Cookie: __Host-sh-session={{shSession}}
+Cookie: {{sessionCookie}}={{shSession}}
 
 > {% client.test("Origin 차단", function () { client.assert(response.status === 403); }); %}
 
-### 7-1. 로그인 유지 새 대화 restart (실행마다 새로운 대화; 재시도는 7-2 사용)
-# @no-cookie-jar
-< {%
-    client.global.set("restartThread", request.variables.get("$uuid"));
-    client.global.set("restartKey", request.variables.get("$uuid"));
-%}
-POST {{baseUrl}}/api/auth/session/restart
-Origin: {{baseUrl}}
-Idempotency-Key: {{restartKey}}
-Cookie: __Host-sh-session={{shSession}}
-Content-Type: application/json
-
-{"threadId":"{{restartThread}}"}
-
-> {%
-    client.test("restart", function () { client.assert(response.status === 200); });
-    const cookie = response.headers.valuesOf("Set-Cookie").find(v => v.startsWith("__Host-sh-session="));
-    client.global.set("shSession", cookie.split(";")[0].substring("__Host-sh-session=".length));
-    client.global.set("threadId", response.body.threadId);
-%}
-
-### 7-2. 직전 restart 재시도 (7-1에서 생성한 키와 thread 유지)
-# @no-cookie-jar
-POST {{baseUrl}}/api/auth/session/restart
-Origin: {{baseUrl}}
-Idempotency-Key: {{restartKey}}
-Cookie: __Host-sh-session={{shSession}}
-Content-Type: application/json
-
-{"threadId":"{{restartThread}}"}
-
-> {% client.test("restart 재시도", function () { client.assert(response.status === 200); }); %}
+### 새 대화는 FE가 threadId를 새로 생성하고 backend-flow.http의 채팅 요청에 사용합니다.
+# restart API는 없습니다. 로그인 세션 쿠키는 그대로 사용합니다.

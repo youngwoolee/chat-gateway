@@ -1,30 +1,14 @@
 package com.example.chatgateway.exception;
 
-import java.util.List;
-
 public final class GatewayException extends RuntimeException {
-  private final List<String> failedAuthReqIds;
   private final int code;
   private final String status;
 
-  /** 외부에 노출 가능한 HTTP 코드와 오류 상태를 보관한다. 인증 원문이나 내부 상세 메시지를 포함하지 않는다. */
+  /** 인증 원문이나 내부 상세 메시지는 포함하지 않는다. */
   public GatewayException(int code, String status) {
-    this(code, status, List.of());
-  }
-
-  public GatewayException(int code, String status, List<String> failedAuthReqIds) {
     super(status);
-    this.failedAuthReqIds = List.copyOf(failedAuthReqIds);
     this.code = code;
     this.status = status;
-  }
-
-  public List<String> failedAuthReqIds() {
-    return failedAuthReqIds;
-  }
-
-  public static GatewayException mfaFailure(String status, List<String> ids) {
-    return new GatewayException(403, status, ids);
   }
 
   /** 응답에 사용할 HTTP 상태 코드를 반환한다. */
@@ -70,15 +54,5 @@ public final class GatewayException extends RuntimeException {
   /** 업무·고객·인증 요청 결합 불일치를 나타내는 403 예외를 생성한다. */
   public static GatewayException mfaInvalid() {
     return new GatewayException(403, "MFA_INVALID");
-  }
-
-  /** 업무 승인 또는 인증 도전 만료를 나타내는 403 예외를 생성한다. */
-  public static GatewayException mfaExpired() {
-    return new GatewayException(403, "MFA_EXPIRED");
-  }
-
-  /** 등록 업무나 승인이 없음을 나타내는 403 예외를 생성한다. */
-  public static GatewayException mfaRequired() {
-    return new GatewayException(403, "MFA_REQUIRED");
   }
 }

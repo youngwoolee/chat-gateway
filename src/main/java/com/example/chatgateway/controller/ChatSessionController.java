@@ -6,7 +6,6 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.time.Clock;
 import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
 /** 프론트의 세션 생성·새 대화 요청을 처리한다. */
@@ -27,20 +26,10 @@ public class ChatSessionController {
     return response(auth.createOrReuse(e, response));
   }
 
-  /** 새 대화는 유효한 회원 인증을 승계하고 세션 ID·대화 ID를 교체한다. */
-  @PostMapping("/api/auth/session/restart")
-  public SessionResponse restart(
-      HttpServletRequest request, HttpServletResponse response, @RequestBody Restart input) {
-    return response(auth.restart(request, response, input.threadId()));
-  }
-
-  public record Restart(String threadId) {}
-
   /** 세션 ID 원문 없이 사용자 유형과 UTC epoch milliseconds 기준 시각을 응답으로 구성한다. */
   private SessionResponse response(Session s) {
-    return new SessionResponse(s.userType(), s.expiresAt(), clock.millis(), s.threadId());
+    return new SessionResponse(s.userType(), s.expiresAt(), clock.millis());
   }
 
-  public record SessionResponse(
-      String userType, long expiresAt, long serverTime, String threadId) {}
+  public record SessionResponse(String userType, long expiresAt, long serverTime) {}
 }

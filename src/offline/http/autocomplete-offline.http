@@ -2,9 +2,9 @@
 # 자동완성 mock은 AUTOCOMPLETE_BASE_URL(기본 localhost:8001)에 실행합니다.
 ### 자동완성 (키 없이 조회, 세션 연장 없음)
 # @no-cookie-jar
-POST {{baseUrl}}/api/chat/auto
+POST {{baseUrl}}/api/chat/auto?channelId={{channelId}}
 Origin: {{baseUrl}}
-Cookie: __Host-sh-session={{shSession}}
+Cookie: {{sessionCookie}}={{shSession}}
 Content-Type: application/json
 
 {"queryText":"카드","size":10,"channel":"sol-chat"}

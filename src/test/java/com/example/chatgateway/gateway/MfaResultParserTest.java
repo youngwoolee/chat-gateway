@@ -5,22 +5,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.example.chatgateway.config.MfaProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
-import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 class MfaResultParserTest {
-  final MfaResultParser parser =
-      new MfaResultParser(
-          new MfaProperties(
-              Duration.ofMinutes(10),
-              Duration.ofMinutes(2),
-              8,
-              4096,
-              Set.of("FINANCE_CA", "SHINHAN")),
-          new ObjectMapper());
+  final MfaResultParser parser = new MfaResultParser(new MfaProperties(4096), new ObjectMapper());
+  final String input =
+      "{\"identifier\":{\"ssn\":\"s\",\"iPin\":\"i\"},\"ticketIds\":[\"t\"],\"code\":\"c\"}";
 
   String encode(String json) {
     return Base64.getUrlEncoder()
@@ -29,26 +21,34 @@ class MfaResultParserTest {
   }
 
   @Test
-  void parseRejectsDuplicateIdsUnknownFieldsAndOversize() {
-    String id = "ar_a";
-    String one = "{\"authReqId\":\"" + id + "\",\"tranID\":\"T\",\"method\":\"SHINHAN\"}";
-    assertThat(parser.parse(List.of(encode("[" + one + "]")))).hasSize(1);
-    for (var headers :
-        List.of(
-            List.of("a", "b"),
-            List.of("a".repeat(4097)),
-            List.of(encode("[" + one + "," + one + "]")),
-            List.of(encode("[]")),
-            List.of(encode("[{\"authReqId\":\"a\",\"authReqId\":\"b\"}]")),
-            List.of(
-                encode(
-                    "[{\"authReqId\":\"a\",\"tranID\":\"T\",\"method\":\"SHINHAN\",\"extra\":true}]")))) {
-      assertThatThrownBy(() -> parser.parse(headers)).hasMessage("INVALID_ARGUMENT");
-    }
+  void acceptsTicketObjectAndAbsentHeader() {
+    assertThat(parser.parse(List.of(encode(input))).ticketIds()).containsExactly("t");
+    assertThat(parser.parse(List.of())).isNull();
   }
 
   @Test
-  void missingHeaderNeedsNoMfa() {
-    assertThat(parser.parse(List.of())).isEmpty();
+  void numericTicketAndCodeAreNotCoercedToStrings() {
+    for (String json :
+        List.of(input.replace("[\"t\"]", "[1]"), input.replace("\"code\":\"c\"", "\"code\":1")))
+      assertThatThrownBy(() -> parser.parse(List.of(encode(json)))).hasMessage("INVALID_ARGUMENT");
+  }
+
+  @Test
+  void rejectsMalformedAmbiguousAndOldInputs() {
+    for (var headers :
+        List.of(
+            List.of(""),
+            List.of("a", "b"),
+            List.of("a".repeat(4097)),
+            List.of(encode("[" + input + "]")),
+            List.of(encode("null")),
+            List.of(encode(input + "{}")),
+            List.of(encode(input.replace("[\"t\"]", "[]"))),
+            List.of(encode(input.replace("[\"t\"]", "[\"t\",\"t\"]"))),
+            List.of(encode(input.replace("\"ssn\":\"s\"", "\"ssn\":\"s\",\"ssn\":\"other\""))),
+            List.of(encode(input.replace("\"code\":\"c\"", "\"unexpected\":true"))),
+            List.of(encode(input.replace("\"iPin\":\"i\"", "\"iPin\":null"))))) {
+      assertThatThrownBy(() -> parser.parse(headers)).hasMessage("INVALID_ARGUMENT");
+    }
   }
 }

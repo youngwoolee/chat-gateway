@@ -40,13 +40,8 @@ eureka:
     service-url:
       defaultZone: ${EUREKA_URL}
 chat:
-  # FE 피드백 반영 제안값. 실제 PFC 수단·위자드 체류시간 합의 후 조정한다.
   mfa:
-    registration-ttl: 10m
-    verified-ttl: 2m
-    max-results: 8
     max-header-bytes: 4096
-    methods: [FINANCE_CA, SHINHAN]
   session-service:
     service-id: agent-session-service
     credential: ${SESSION_SERVICE_CREDENTIAL:}
@@ -61,17 +56,9 @@ chat:
   session:
     # 발화·도구 실행 등 인정 활동으로 연장하는 세션 유효시간
     idle-timeout: 5m
-    # 이미 시작한 실행의 별도 기한. 세션 자연 만료가 진행 중인 답변을 끊지는 않는다.
-    execution-timeout: 10m
     # 플랫폼 _O 삭제 / _I 발급에 공통 사용. 세션 쿠키에는 Domain을 설정하지 않는다.
     platform-domain: shinhancard.com
     platform-path: /
-    # Gateway → B/E 서비스 인증. 실제 값은 환경변수 등 외부 설정으로 주입한다.
-    backend-credential: ${BACKEND_SERVICE_CREDENTIAL:}
-    # B/E → Gateway 서비스 인증. 브라우저에 노출하거나 사용자 인증으로 사용하지 않는다.
-    inbound-credential: ${GATEWAY_SERVICE_CREDENTIAL:}
-    # 추가 인증 등록이 허용된 업무 인터페이스만 등록한다. 빈 목록은 모두 차단한다.
-    allowed-interfaces: []
   # staging 고객 권한. 실제 채널과 목적지는 서버 설정으로 등록한다.
   staging:
     channels: {}
@@ -80,5 +67,5 @@ chat:
     database: chat_gateway
     # mongo-uri는 운영 외부 설정에서 주입한다. 미설정 시 staging 회원 권한 조회는 503.
   channels:
-    # 채널 UUID → PFC. 기본 빈 목록은 모든 채널 요청을 거절한다.
+    # 채널 UUID → PFC. 첫 구간은 쿠키 접두사이므로 채널마다 달라야 한다. 빈 목록은 모두 거절한다.
     allowed: {}
