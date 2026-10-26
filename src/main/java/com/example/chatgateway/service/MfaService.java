@@ -5,6 +5,8 @@ import com.example.chatgateway.client.pfc.PfcClient.MfaInput;
 import com.example.chatgateway.cookie.SessionCookies;
 import com.example.chatgateway.exception.GatewayException;
 import com.example.chatgateway.session.Session;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
@@ -22,12 +24,15 @@ public class MfaService {
     this.mapper = mapper;
   }
 
-  /** 본문은 이미 엄격 JSON 검증을 통과했다. 인증 결과는 단일 resolved interrupt에만 결합한다. */
+  /** 업무 인증 본문을 엄격히 읽고 인증 결과를 단일 resolved interrupt에만 결합한다. */
   public String verifyResume(
       Session session, HttpServletRequest request, byte[] body, MfaInput input) {
     JsonNode resume;
     try {
-      resume = mapper.readTree(body).path("resume");
+      resume = mapper.reader()
+          .with(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
+          .with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+          .readTree(body).path("resume");
     } catch (Exception invalid) {
       throw GatewayException.badRequest();
     }
@@ -42,7 +47,7 @@ public class MfaService {
     if (!session.member()) throw GatewayException.mfaInvalid();
     String subject;
     try {
-      subject = platform.verify(input, state);
+      subject = platform.verifyTicketId(input, state);
     } catch (GatewayException error) {
       if (error.code() == 401 || error.code() == 403) throw GatewayException.mfaInvalid();
       throw GatewayException.unavailable();

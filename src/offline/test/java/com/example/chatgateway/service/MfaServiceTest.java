@@ -49,9 +49,9 @@ class MfaServiceTest {
 
   @Test
   void verifiedIdentityBindsExactlyOneInterrupt() {
-    when(pfc.verify(input, "state")).thenReturn(member.subject());
+    when(pfc.verifyTicketId(input, "state")).thenReturn(member.subject());
     assertThat(service.verifyResume(member, request(), body(resolved), input)).isEqualTo("int-3");
-    verify(pfc, times(1)).verify(input, "state");
+    verify(pfc, times(1)).verifyTicketId(input, "state");
   }
 
   @Test
@@ -83,21 +83,21 @@ class MfaServiceTest {
     assertThatThrownBy(() -> service.verifyResume(guest, request(), body(resolved), input))
         .hasMessage("MFA_INVALID");
     verifyNoInteractions(pfc);
-    when(pfc.verify(any(), anyString())).thenReturn("P987654321");
+    when(pfc.verifyTicketId(any(), anyString())).thenReturn("P987654321");
     assertThatThrownBy(() -> service.verifyResume(member, request(), body(resolved), input))
         .hasMessage("MFA_INVALID");
   }
 
   @Test
   void rejectionAndInfrastructureFailureStayDistinctWithoutRetries() {
-    when(pfc.verify(any(), anyString())).thenThrow(GatewayException.mfaInvalid());
+    when(pfc.verifyTicketId(any(), anyString())).thenThrow(GatewayException.mfaInvalid());
     assertThatThrownBy(() -> service.verifyResume(member, request(), body(resolved), input))
         .hasMessage("MFA_INVALID");
     org.mockito.Mockito.doThrow(new IllegalStateException("transport"))
         .when(pfc)
-        .verify(any(), anyString());
+        .verifyTicketId(any(), anyString());
     assertThatThrownBy(() -> service.verifyResume(member, request(), body(resolved), input))
         .hasMessage("UNAVAILABLE");
-    verify(pfc, times(2)).verify(any(), anyString());
+    verify(pfc, times(2)).verifyTicketId(any(), anyString());
   }
 }

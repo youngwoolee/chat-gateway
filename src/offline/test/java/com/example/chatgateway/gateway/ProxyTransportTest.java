@@ -507,10 +507,17 @@ class ProxyTransportTest {
   }
 
   @Test
-  void invalidChatBodiesNeverReachBackend() throws Exception {
-    for (String body : new String[] {"", "{", "[]", "{}", "{\"threadId\":1}"})
-      post("/api/chat").bodyValue(body).exchange().expectStatus().isEqualTo(400);
-    assertThat(BACKEND.takeRequest(50, TimeUnit.MILLISECONDS)).isNull();
+  void chatBodyValidationIsDelegatedToBackend() throws Exception {
+    for (String body : new String[] {"", "{", "[]", "{}", "{\"threadId\":1}",
+        "{\"threadId\":\"대화 ID with spaces\"}"}) {
+      BACKEND.enqueue(new MockResponse().setResponseCode(422).setBody("backend-validation"));
+      assertThat(post("/api/chat").bodyValue(body).exchange()
+          .expectStatus().isEqualTo(422).getResponseBody())
+          .isEqualTo("backend-validation".getBytes(StandardCharsets.UTF_8));
+      var forwarded = BACKEND.takeRequest(2, TimeUnit.SECONDS);
+      assertThat(forwarded).isNotNull();
+      assertThat(forwarded.getBody().readUtf8()).isEqualTo(body);
+    }
   }
 
   @Test

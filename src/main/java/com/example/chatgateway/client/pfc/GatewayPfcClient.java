@@ -17,13 +17,13 @@ public class GatewayPfcClient implements PfcClient {
   }
 
   @Override
-  public String authenticate(IdentityCookies cookies) {
+  public String getUserId(IdentityCookies cookies) {
     return pfcAuthService.getUserId(
         cookies.systemCode(), "CBA", cookies.authentication(), cookies.verify());
   }
 
   @Override
-  public IdentityCookies homepage(String subject) {
+  public IdentityCookies createLoginCookie(String subject) {
     var result = cookieService.createLoginCookie(subject);
     if (result == null) throw GatewayException.badGateway();
     return new IdentityCookies(
@@ -31,7 +31,7 @@ public class GatewayPfcClient implements PfcClient {
   }
 
   @Override
-  public String verify(MfaInput input, String state) {
+  public String verifyTicketId(MfaInput input, String state) {
     // 기존 VerifyTicketResult에는 회원 PID가 없어 검증 대상과 세션 소유자를 대조할 수 없다.
     throw GatewayException.unavailable();
   }

@@ -82,8 +82,8 @@ class ChannelSessionTest {
     Cookie a = create(A, COOKIE_A);
     Cookie b = create(B, COOKIE_B, a);
     Session second = auth.inspect(request(B, a, b), new MockHttpServletResponse());
-    when(pfc.authenticate(any())).thenReturn("P123456789");
-    when(pfc.homepage(any())).thenReturn(new PfcClient.IdentityCookies("CBA", "ticket", "proof"));
+    when(pfc.getUserId(any())).thenReturn("P123456789");
+    when(pfc.createLoginCookie(any())).thenReturn(new PfcClient.IdentityCookies("CBA", "ticket", "proof"));
     var request =
         request(
             A,

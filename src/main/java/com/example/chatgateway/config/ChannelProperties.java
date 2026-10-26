@@ -4,6 +4,8 @@ import com.example.chatgateway.cookie.SessionCookies;
 import java.util.HashSet;
 import java.util.Map;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.ConstructorBinding;
+import org.springframework.boot.context.properties.bind.DefaultValue;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -13,7 +15,13 @@ import org.springframework.web.server.ResponseStatusException;
  * @param allowed 채널 ID → 인증 유형 매핑. 비어 있으면 모든 채널 요청을 거절한다.
  */
 @ConfigurationProperties("chat.channels")
-public record ChannelProperties(Map<String, AuthType> allowed) {
+public record ChannelProperties(
+    Map<String, AuthType> allowed, @DefaultValue("true") boolean allowlistEnabled) {
+  public ChannelProperties(Map<String, AuthType> allowed) {
+    this(allowed, true);
+  }
+
+  @ConstructorBinding
   public ChannelProperties {
     var names = new HashSet<String>();
     if (allowed != null)
@@ -24,6 +32,16 @@ public record ChannelProperties(Map<String, AuthType> allowed) {
 
   /** 서버 허용 목록에 등록된 채널만 반환한다. 미등록 채널은 403이며 지원하지 않는 인증 유형 설정은 오류로 처리한다. */
   public AuthType require(String channelId) {
+    if (!allowlistEnabled) {
+      if (channelId == null || channelId.isBlank())
+        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Channel is required");
+      try {
+        SessionCookies.name(channelId);
+      } catch (IllegalArgumentException invalid) {
+        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid channel cookie prefix");
+      }
+      return AuthType.PFC;
+    }
     if (channelId == null || allowed == null || !allowed.containsKey(channelId)) {
       throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Channel is not allowed");
     }

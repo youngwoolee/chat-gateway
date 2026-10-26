@@ -50,43 +50,47 @@ public class SessionAuthentication {
   /** _O 입력은 기존 세션보다 우선하며 로그인 실패는 새 게스트로 처리한다. */
   public Session createOrReuse(HttpServletRequest request, HttpServletResponse response) {
     String channel = requestChannel(request);
-    if (cookies.hasIdentity(request))
-      return completeActivity(response, createSession(request, response, channel));
-    Session session = findExisting(request, channel);
-    if (session == null)
-      return completeActivity(response, createSession(request, response, channel));
+    if (cookies.hasIdentity(request)) return createSession(request, response, channel);
+    Session session = findExisting(request, response, channel);
+    if (session == null) return createSession(request, response, channel);
     requireUnexpired(response, session);
     access.require(session);
-    headers(response, session);
-    return completeActivity(response, touch(response, session));
+    return refreshSession(response, session);
   }
 
   public Session inspect(HttpServletRequest request, HttpServletResponse response) {
     Session session = requireActive(request, response);
-    headers(response, session);
+    setSessionHeaders(response, session);
     return session;
   }
 
   /** 대화 ID와 무관하게 로그인 세션의 활동만 연장한다. */
   public Session authenticateActivity(HttpServletRequest request, HttpServletResponse response) {
-    Session session = inspect(request, response);
-    return completeActivity(response, touch(response, session));
+    Session session = requireActive(request, response);
+    return refreshSession(response, session);
   }
 
   /** SID가 없을 때만 null을 반환한다. 알 수 없거나 폐기된 SID는 신규 생성으로 우회하지 않는다. */
-  private Session findExisting(HttpServletRequest request, String channel) {
+  private Session findExisting(
+      HttpServletRequest request, HttpServletResponse response, String channel) {
     String sid = cookies.session(request, channel);
     if (sid == null) return null;
     Session session = store.find(Credentials.hash(sid));
-    if (session == null) throw GatewayException.unauthorized();
+    if (session == null) {
+      cookies.clear(response, channel);
+      throw GatewayException.unauthorized();
+    }
     if (!session.channel().equals(channel)) throw GatewayException.denied();
-    if (!"ACTIVE".equals(session.state())) throw GatewayException.unauthorized();
+    if (!"ACTIVE".equals(session.state())) {
+      cookies.clear(response, channel);
+      throw GatewayException.unauthorized();
+    }
     return session;
   }
 
   /** 조회·대화는 기존 유효 세션이 필수이며 만료 세션을 새로 만들지 않는다. */
   private Session requireActive(HttpServletRequest request, HttpServletResponse response) {
-    Session session = findExisting(request, requestChannel(request));
+    Session session = findExisting(request, response, requestChannel(request));
     if (session == null) throw GatewayException.unauthorized();
     requireUnexpired(response, session);
     access.require(session);
@@ -101,9 +105,9 @@ public class SessionAuthentication {
   }
 
   /** 유효한 활동 요청마다 저장소의 원자적 활동 연장을 사용한다. */
-  private Session touch(HttpServletResponse response, Session session) {
+  private Session extendSession(HttpServletResponse response, Session session) {
     try {
-      return required(
+      return requireSession(
           store.touch(session.idHash(), clock.millis(), settings.idleTimeout().toMillis(), null));
     } catch (GatewayException error) {
       if (error.code() == 401) {
@@ -115,11 +119,18 @@ public class SessionAuthentication {
     }
   }
 
-  /** 생성·대화 응답에 회원 홈페이지 연동 쿠키와 만료 정보를 반영한다. */
-  private Session completeActivity(HttpServletResponse response, Session session) {
-    required(session);
-    headers(response, session);
-    if (session.member()) issueHomepageCookies(response, session);
+  /** 쿠키 생성에 성공한 뒤 세션을 연장하고 응답에 반영한다. */
+  private Session refreshSession(HttpServletResponse response, Session session) {
+    IdentityCookies loginCookies = session.member() ? createLoginCookies(session.subject()) : null;
+    Session updated = extendSession(response, session);
+    return applySession(response, updated, loginCookies);
+  }
+
+  /** 저장·연장이 완료된 세션의 헤더와 준비된 로그인 쿠키를 응답에 반영한다. */
+  private Session applySession(
+      HttpServletResponse response, Session session, IdentityCookies loginCookies) {
+    setSessionHeaders(response, session);
+    if (loginCookies != null) cookies.writeLoginCookies(response, loginCookies);
     return session;
   }
 
@@ -165,7 +176,7 @@ public class SessionAuthentication {
     try {
       IdentityCookies identity = cookies.identity(request);
       if (identity != null) {
-        user = platform.authenticate(identity);
+        user = platform.getUserId(identity);
         verified = user != null && user.matches("P[0-9]{9}");
       }
     } catch (RuntimeException loginFailure) {
@@ -175,6 +186,7 @@ public class SessionAuthentication {
     access.require(channel, user, verified);
     String sid = Credentials.random();
     Session previous = verified ? previousGuest(request, channel) : null;
+    IdentityCookies loginCookies = verified ? createLoginCookies(user) : null;
     long now = clock.millis();
     Session proposed =
         new Session(
@@ -187,16 +199,15 @@ public class SessionAuthentication {
             now + settings.idleTimeout().toMillis(),
             previous == null ? null : previous.subject());
     Session saved =
-        required(
+        requireSession(
             previous == null
                 ? store.create(proposed, null)
                 : store.replaceGuest(previous.idHash(), null, proposed, now));
     if (!saved.member() && !Credentials.isGuestId(saved.subject()))
       throw GatewayException.badGateway();
-    headers(response, saved);
     cookies.issue(response, sid, channel);
-    if (verified) cookies.consume(response);
-    return saved;
+    if (verified) cookies.clearAuthCookies(response);
+    return applySession(response, saved, loginCookies);
   }
 
   /** 이전 게스트 신원은 같은 채널의 유효한 서버 세션에서만 얻는다. */
@@ -218,25 +229,25 @@ public class SessionAuthentication {
         : null;
   }
 
-  /** 회원 인증·대화 요청 응답에 홈페이지 연동 쿠키를 준비한다. 별도 활동 연장은 하지 않는다. */
-  private void issueHomepageCookies(HttpServletResponse response, Session session) {
-    IdentityCookies identity = platform.homepage(session.subject());
+  /** 저장소를 변경하기 전에 회원 로그인 쿠키 값을 생성하고 검증한다. */
+  private IdentityCookies createLoginCookies(String userId) {
+    IdentityCookies identity = platform.createLoginCookie(userId);
     if (identity == null) throw GatewayException.badGateway();
     for (String value :
         new String[] {identity.systemCode(), identity.authentication(), identity.verify()})
       if (value == null || value.isBlank()) throw GatewayException.badGateway();
-    cookies.homepage(response, identity);
+    return identity;
   }
 
   /** 유효성 검사와 활동 연장을 최종 저장소에서 원자 처리하고 만료 헤더를 반영한다. */
   public Session activity(HttpServletResponse response, Session s) {
-    Session updated = touch(response, s);
-    headers(response, updated);
+    Session updated = extendSession(response, s);
+    setSessionHeaders(response, updated);
     return updated;
   }
 
   /** 프론트의 만료 안내에 필요한 서버 시각·세션 만료 시각을 밀리초로 제공하고 인증 응답 캐시를 금지한다. */
-  private void headers(HttpServletResponse response, Session s) {
+  private void setSessionHeaders(HttpServletResponse response, Session s) {
     response.setHeader("X-Chat-User-Type", s.userType());
     response.setHeader("X-Chat-Auth-Expires-At", Long.toString(s.expiresAt()));
     response.setHeader("X-Server-Time", Long.toString(clock.millis()));
@@ -244,7 +255,7 @@ public class SessionAuthentication {
   }
 
   /** 필수 저장 결과가 없으면 연동 오류로 거절한다. */
-  private static Session required(Session session) {
+  private static Session requireSession(Session session) {
     if (session == null) throw GatewayException.badGateway();
     return session;
   }

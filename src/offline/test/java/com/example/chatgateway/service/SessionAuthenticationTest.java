@@ -57,7 +57,7 @@ class SessionAuthenticationTest {
 
   @BeforeEach
   void setup() {
-    when(platform.homepage(any()))
+    when(platform.createLoginCookie(any()))
         .thenReturn(new PfcClient.IdentityCookies("CBA", "ticket", "proof"));
     auth = service(store);
   }
@@ -96,7 +96,7 @@ class SessionAuthenticationTest {
   void cookieLossRequiresFreshIdentityAndNeverRestoresGuestOwnership() {
     String sid = guest();
     var previous = store.find(Credentials.hash(sid));
-    when(platform.authenticate(any())).thenReturn("P123456789");
+    when(platform.getUserId(any())).thenReturn("P123456789");
     var memberRequest = request(null, true);
     var member = createOrReuse(auth, memberRequest);
     assertThat(member.subject()).isEqualTo("P123456789");
@@ -111,7 +111,7 @@ class SessionAuthenticationTest {
   @Test
   void promotionRotatesSessionAndPreservesTrustedGuestWithoutBackendCall() {
     String sid = guest();
-    when(platform.authenticate(any())).thenReturn("P123456789");
+    when(platform.getUserId(any())).thenReturn("P123456789");
     var e = request(sid, true);
     var member = createOrReuse(auth, e);
     assertThat(member.guestSubject()).isEqualTo("guest");
@@ -129,7 +129,7 @@ class SessionAuthenticationTest {
     org.mockito.Mockito.doThrow(GatewayException.unavailable()).when(authority).checkAvailable();
     var unavailable = service(authority);
     var e = request(null, true);
-    when(platform.authenticate(any()))
+    when(platform.getUserId(any()))
         .thenThrow(new AssertionError("Must not call platform authentication"));
     assertThatThrownBy(() -> createOrReuse(unavailable, e)).hasMessage("UNAVAILABLE");
     assertThat(e.getResponse().getCookies()).isEmpty();
@@ -166,7 +166,7 @@ class SessionAuthenticationTest {
   @Test
   void startLoginPromotesAndEveryNewActivityExtendsSession() {
     String sid = guest();
-    when(platform.authenticate(any())).thenReturn("P123456789");
+    when(platform.getUserId(any())).thenReturn("P123456789");
     var exchange = request(sid, true);
     Session member = createOrReuse(auth, exchange);
     String replacement =
@@ -198,8 +198,25 @@ class SessionAuthenticationTest {
     if (!state.equals("missing"))
       assertThatThrownBy(() -> createOrReuse(auth, request(sid, false)))
           .hasMessage("UNAUTHENTICATED");
-    assertThat(exchange.getResponse().getCookies()).isEmpty();
+    if (state.equals("missing")) {
+      assertThat(exchange.getResponse().getCookies()).isEmpty();
+    } else {
+      assertThat(exchange.getResponse().getCookie(SessionCookies.name("channel")).getMaxAge())
+          .isZero();
+    }
     verifyNoInteractions(platform);
+  }
+
+  @Test
+  void missingSessionClearsCookieAndNextStartCanCreateGuest() {
+    var stale = request(Credentials.random(), false);
+    assertThatThrownBy(() -> createOrReuse(auth, stale)).hasMessage("UNAUTHENTICATED");
+    assertThat(stale.getResponse().getCookie(SessionCookies.name("channel")).getMaxAge())
+        .isZero();
+    var next = request(null, false);
+    assertThat(createOrReuse(auth, next).userType()).isEqualTo("GUEST");
+    assertThat(next.getResponse().getCookie(SessionCookies.name("channel")).getValue())
+        .isNotBlank();
   }
 
   @Test
@@ -232,14 +249,14 @@ class SessionAuthenticationTest {
             GatewayException.unauthorized(),
             GatewayException.unavailable(),
             new IllegalStateException("PFC"))) {
-      org.mockito.Mockito.doThrow(error).when(platform).authenticate(any());
+      org.mockito.Mockito.doThrow(error).when(platform).getUserId(any());
       var exchange = request(guest(), true);
       Session created = createOrReuse(auth, exchange);
       assertThat(created.userType()).isEqualTo("GUEST");
       assertThat(created.subject()).matches("G[0-9]{12}");
       assertThat(exchange.getResponse().getCookie(SessionCookies.name("channel"))).isNotNull();
     }
-    org.mockito.Mockito.doReturn("P123456789").when(platform).authenticate(any());
+    org.mockito.Mockito.doReturn("P123456789").when(platform).getUserId(any());
     var exchange = request(guest(), true);
     assertThat(createOrReuse(auth, exchange).userType()).isEqualTo("MEMBER");
   }
@@ -251,7 +268,7 @@ class SessionAuthenticationTest {
     assertThat(createOrReuse(auth, partial).userType()).isEqualTo("GUEST");
     verifyNoInteractions(platform);
     for (String invalid : new String[] {"member", "P123", "P1234567890", "G123456789"}) {
-      when(platform.authenticate(any())).thenReturn(invalid);
+      when(platform.getUserId(any())).thenReturn(invalid);
       assertThat(createOrReuse(auth, request(null, true)).userType()).isEqualTo("GUEST");
     }
   }
@@ -275,7 +292,7 @@ class SessionAuthenticationTest {
           .isZero();
     }
     verifyNoInteractions(platform);
-    when(platform.authenticate(any())).thenReturn("P123456789");
+    when(platform.getUserId(any())).thenReturn("P123456789");
     assertThat(createOrReuse(auth, request(sid, true)).userType()).isEqualTo("MEMBER");
   }
 
@@ -306,6 +323,32 @@ class SessionAuthenticationTest {
         .isZero();
     assertThat(exchange.getResponse().getHeader("X-Chat-User-Type")).isNull();
     assertThat(exchange.getResponse().getHeader("X-Chat-Auth-Expires-At")).isNull();
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void loginCookieFailureDoesNotCreateOrExtendSession(boolean existing) {
+    var authority = mock(AuthorityStore.class);
+    String sid = Credentials.random();
+    if (existing) {
+      when(authority.find(Credentials.hash(sid)))
+          .thenReturn(new Session(Credentials.hash(sid), "P123456789", "MEMBER",
+              "channel", "ACTIVE", 0, 300000, null));
+    } else {
+      when(platform.getUserId(any())).thenReturn("P123456789");
+    }
+    when(platform.createLoginCookie(any())).thenReturn(null);
+    var exchange = request(existing ? sid : null, !existing);
+    assertThatThrownBy(() -> createOrReuse(service(authority), exchange))
+        .hasMessage("BAD_GATEWAY");
+    org.mockito.Mockito.verify(authority, org.mockito.Mockito.never()).create(any(), any());
+    org.mockito.Mockito.verify(authority, org.mockito.Mockito.never())
+        .replaceGuest(any(), any(), any(), org.mockito.ArgumentMatchers.anyLong());
+    org.mockito.Mockito.verify(authority, org.mockito.Mockito.never())
+        .touch(any(), org.mockito.ArgumentMatchers.anyLong(),
+            org.mockito.ArgumentMatchers.anyLong(), any());
+    assertThat(exchange.getResponse().getHeaders("Set-Cookie")).isEmpty();
+    assertThat(exchange.getResponse().getHeader("X-Chat-User-Type")).isNull();
   }
 
   record Exchange(MockHttpServletRequest getRequest, MockHttpServletResponse getResponse) {

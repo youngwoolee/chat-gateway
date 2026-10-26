@@ -5,7 +5,6 @@ import com.example.chatgateway.service.ChatService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
@@ -28,12 +27,12 @@ public class ChatController {
     return service.chat(request, response);
   }
 
-  /** 도구 실행은 발화 JSON 검증과 구분하여 전달한다. */
+  /** 도구 실행의 경로와 본문을 B/E에 전달한다. */
   @PostMapping("/api/chat/threads/{threadId}/tools/{toolName}/{toolRoute}")
   public ResponseBodyEmitter tool(
-      HttpServletRequest request, HttpServletResponse response, @PathVariable String threadId)
+      HttpServletRequest request, HttpServletResponse response)
       throws Exception {
-    return service.tool(request, response, threadId);
+    return service.tool(request, response);
   }
 
   /** 이력·아티팩트 조회는 세션을 연장하지 않는다. */
@@ -43,11 +42,9 @@ public class ChatController {
     "/api/chat/threads/{threadId}/artifacts/{artifactId}"
   })
   public ResponseBodyEmitter history(
-      HttpServletRequest request,
-      HttpServletResponse response,
-      @PathVariable(required = false) String threadId)
+      HttpServletRequest request, HttpServletResponse response)
       throws Exception {
-    return service.history(request, response, threadId);
+    return service.history(request, response);
   }
 
   /** 명시적으로 공개한 경로·메서드 외에는 자동 OPTIONS/중계로 확장하지 않는다. */

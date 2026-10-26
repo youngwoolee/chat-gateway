@@ -7,10 +7,6 @@ import com.example.chatgateway.config.ChatProperties;
 import com.example.chatgateway.exception.GatewayException;
 import com.example.chatgateway.gateway.MfaResultParser;
 import com.example.chatgateway.service.ChatAuthenticationService.AuthenticatedChat;
-import com.example.chatgateway.session.Credentials;
-import com.fasterxml.jackson.core.JsonParser;
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -31,7 +27,6 @@ public class ChatService {
   private final AgentBackendClient backend;
   private final BackendHeaders headers;
   private final SseRelayService streams;
-  private final ObjectMapper mapper;
   private final Semaphore admission;
 
   public ChatService(
@@ -40,22 +35,19 @@ public class ChatService {
       AgentBackendClient backend,
       BackendHeaders headers,
       SseRelayService streams,
-      ObjectMapper mapper,
       ChatProperties properties) {
     this.authentication = authentication;
     this.mfaParser = mfaParser;
     this.backend = backend;
     this.headers = headers;
     this.streams = streams;
-    this.mapper = mapper;
     admission = new Semaphore(properties.backend().maxStreams());
   }
 
-  /** 일반 JSON 발화를 검증하고 인증한 뒤 B/E 응답을 전달한다. */
+  /** 요청 크기를 제한하고 인증한 뒤 발화 본문을 원문 중계한다. */
   public ResponseBodyEmitter chat(HttpServletRequest request, HttpServletResponse response)
       throws Exception {
     byte[] body = readChatBody(request);
-    thread(body);
     var results = mfaParser.parse(Collections.list(request.getHeaders("X-Mfa-Result")));
     return send(
         request,
@@ -67,11 +59,10 @@ public class ChatService {
                 target(request, authenticated), headers.request(request, authenticated), body));
   }
 
-  /** 도구 요청은 경로의 대화 ID를 검증하고 원래 본문 그대로 전달한다. */
+  /** 도구 요청의 경로와 본문을 원문 그대로 전달한다. */
   public ResponseBodyEmitter tool(
-      HttpServletRequest request, HttpServletResponse response, String threadId) throws Exception {
+      HttpServletRequest request, HttpServletResponse response) throws Exception {
     rejectMfa(request);
-    Credentials.identifier(threadId);
     var body = request.getInputStream();
     return send(
         request,
@@ -88,9 +79,8 @@ public class ChatService {
 
   /** 조회는 세션을 연장하지 않고 응답을 비동기로 중계한다. */
   public ResponseBodyEmitter history(
-      HttpServletRequest request, HttpServletResponse response, String threadId) throws Exception {
+      HttpServletRequest request, HttpServletResponse response) throws Exception {
     rejectMfa(request);
-    if (threadId != null) Credentials.identifier(threadId);
     return send(
         request,
         response,
@@ -146,20 +136,4 @@ public class ChatService {
       throw GatewayException.badRequest();
   }
 
-  /** JSON은 threadId 검증에만 사용하고 전송 본문을 재직렬화하지 않는다. */
-  private String thread(byte[] body) {
-    try {
-      var json =
-          mapper
-              .reader()
-              .with(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
-              .with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
-              .readTree(body);
-      if (json == null || !json.isObject() || !json.path("threadId").isTextual())
-        throw GatewayException.badRequest();
-      return Credentials.identifier(json.path("threadId").textValue());
-    } catch (Exception error) {
-      throw GatewayException.badRequest();
-    }
-  }
 }

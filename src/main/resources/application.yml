@@ -67,5 +67,7 @@ chat:
     database: chat_gateway
     # mongo-uri는 운영 외부 설정에서 주입한다. 미설정 시 staging 회원 권한 조회는 503.
   channels:
+    # 임시 내부망 연동 테스트용. 검증을 복구하려면 CHANNEL_ALLOWLIST_ENABLED=true.
+    allowlist-enabled: ${CHANNEL_ALLOWLIST_ENABLED:false}
     # 채널 UUID → PFC. 첫 구간은 쿠키 접두사이므로 채널마다 달라야 한다. 빈 목록은 모두 거절한다.
     allowed: {}

@@ -117,13 +117,13 @@ public class SessionCookies {
   }
 
   /** 인증에 실제 사용한 _O 3종을 브라우저에서 삭제한다. 서버 측 티켓 재사용 차단은 플랫폼 계약에서 별도로 보장해야 한다. */
-  public void consume(HttpServletResponse e) {
+  public void clearAuthCookies(HttpServletResponse e) {
     EXTERNAL.forEach(
         n -> e.addHeader("Set-Cookie", platform(n, "").maxAge(Duration.ZERO).build().toString()));
   }
 
   /** 홈페이지가 로그인 세션을 구성하는 데 사용할 _I 3종을 응답에 설정한다. */
-  public void homepage(HttpServletResponse e, IdentityCookies c) {
+  public void writeLoginCookies(HttpServletResponse e, IdentityCookies c) {
     e.addHeader("Set-Cookie", platform("PlatformSystemCode_I", c.systemCode()).build().toString());
     e.addHeader(
         "Set-Cookie", platform("PlatformAuthentication_I", c.authentication()).build().toString());

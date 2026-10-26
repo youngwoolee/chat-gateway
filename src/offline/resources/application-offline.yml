@@ -3,6 +3,7 @@ chat:
   backend:
     base-url: ${BACKEND_BASE_URL:http://127.0.0.1:8000}
   channels:
+    allowlist-enabled: true
     allowed:
       "00000000-0000-0000-0000-000000000001": PFC
       "00000002-0000-0000-0000-000000000002": PFC

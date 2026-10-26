@@ -239,7 +239,7 @@ class SessionHttpIntegrationTest {
   void homepageIssuanceFailurePreventsChatForwarding() throws Exception {
     org.mockito.Mockito.doThrow(com.example.chatgateway.exception.GatewayException.unavailable())
         .when(platform)
-        .homepage(org.mockito.ArgumentMatchers.anyString());
+        .createLoginCookie(org.mockito.ArgumentMatchers.anyString());
     post("/api/chat")
         .cookie(SessionCookies.name(CHANNEL), seed(true, System.currentTimeMillis() + 60000))
         .bodyValue(Map.of("threadId", "thread"))
