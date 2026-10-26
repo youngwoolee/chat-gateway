@@ -195,9 +195,7 @@ class SessionAuthenticationTest {
     if (state.equals("revoked")) store.revoke(Credentials.hash(sid));
     var exchange = request(sid, true);
     assertThatThrownBy(() -> authenticateActivity(auth, exchange)).hasMessage("UNAUTHENTICATED");
-    if (!state.equals("missing"))
-      assertThatThrownBy(() -> createOrReuse(auth, request(sid, false)))
-          .hasMessage("UNAUTHENTICATED");
+    assertThat(createOrReuse(auth, request(sid, false)).userType()).isEqualTo("GUEST");
     if (state.equals("missing")) {
       assertThat(exchange.getResponse().getCookies()).isEmpty();
     } else {
@@ -207,16 +205,25 @@ class SessionAuthenticationTest {
     verifyNoInteractions(platform);
   }
 
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void missingSessionCanRestartWithGuestOrVerifiedMember(boolean identity) {
+    String oldSid = Credentials.random();
+    when(platform.getUserId(any())).thenReturn("P123456789");
+    var request = request(oldSid, identity);
+    Session session = createOrReuse(auth, request);
+    assertThat(session.userType()).isEqualTo(identity ? "MEMBER" : "GUEST");
+    assertThat(request.getResponse().getCookie(SessionCookies.name("channel")).getValue())
+        .isNotBlank().isNotEqualTo(oldSid);
+  }
+
   @Test
-  void missingSessionClearsCookieAndNextStartCanCreateGuest() {
-    var stale = request(Credentials.random(), false);
-    assertThatThrownBy(() -> createOrReuse(auth, stale)).hasMessage("UNAUTHENTICATED");
-    assertThat(stale.getResponse().getCookie(SessionCookies.name("channel")).getMaxAge())
-        .isZero();
-    var next = request(null, false);
-    assertThat(createOrReuse(auth, next).userType()).isEqualTo("GUEST");
-    assertThat(next.getResponse().getCookie(SessionCookies.name("channel")).getValue())
-        .isNotBlank();
+  void storeFailureDuringStartIsNotTreatedAsMissingSession() {
+    var authority = mock(AuthorityStore.class);
+    when(authority.find(any())).thenThrow(GatewayException.unavailable());
+    assertThatThrownBy(() -> createOrReuse(service(authority), request(Credentials.random(), false)))
+        .hasMessage("UNAVAILABLE");
+    org.mockito.Mockito.verify(authority, org.mockito.Mockito.never()).create(any(), any());
   }
 
   @Test
@@ -274,15 +281,14 @@ class SessionAuthenticationTest {
   }
 
   @Test
-  void expiredSessionIsDeletedInsteadOfRecreatedWithoutIdentity() {
+  void expiredSessionRestartsOnlyOnSessionCreation() {
     String sid = guest();
     now = 300000;
-    for (String operation : new String[] {"start", "inspect", "activity"}) {
+    for (String operation : new String[] {"inspect", "activity"}) {
       var exchange = request(sid, false);
       assertThatThrownBy(
               () -> {
                 switch (operation) {
-                  case "start" -> createOrReuse(auth, exchange);
                   case "inspect" -> inspect(auth, exchange);
                   default -> authenticateActivity(auth, exchange);
                 }
@@ -291,6 +297,7 @@ class SessionAuthenticationTest {
       assertThat(exchange.getResponse().getCookie(SessionCookies.name("channel")).getMaxAge())
           .isZero();
     }
+    assertThat(createOrReuse(auth, request(sid, false)).userType()).isEqualTo("GUEST");
     verifyNoInteractions(platform);
     when(platform.getUserId(any())).thenReturn("P123456789");
     assertThat(createOrReuse(auth, request(sid, true)).userType()).isEqualTo("MEMBER");

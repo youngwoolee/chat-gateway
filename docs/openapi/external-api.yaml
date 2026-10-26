@@ -5,9 +5,8 @@ info:
   description: 'Start prepares a channel-specific MEMBER or GUEST session. FE loads conversation list and history
     only for MEMBER; GUEST starts a new conversation. Submitted _O credentials are validated for a new session:
     success creates MEMBER, while incomplete or rejected credentials and PFC login failures create GUEST. Without
-    _O, reuse a valid channel session; create GUEST only when the selected channel cookie is absent. Expired, invalid
-    or revoked sessions presented for reuse return 401. On expiry, G/W deletes only the selected channel cookie;
-    FE then calls start and branches on userType. Member recovery requires fresh _O credentials. Session-service
+    _O, reuse a valid channel session; create GUEST when the selected channel cookie is absent or its session is missing, expired
+    or revoked. Start replaces the cookie in the same response. Chat and history still reject invalid sessions. Member recovery requires fresh _O credentials. Session-service
     failures return 503. threadId belongs to B/E and is not stored in the login session. All FE-facing API responses
     include X-Server-Time. A verified valid session also supplies X-Chat-User-Type and X-Chat-Auth-Expires-At, including
     JSON, SSE and B/E error responses. These are G/W-to-FE response headers. GET and autocomplete do not extend
@@ -84,9 +83,8 @@ paths:
             X-Server-Time:
               $ref: '#/components/headers/ServerTime'
         '401':
-          description: 'UNAUTHENTICATED: existing session presented for reuse without _O is expired, invalid or
-            revoked. Expiry deletes the selected channel cookie so FE can prepare a new session. _O verification
-            failure creates GUEST.'
+          description: 'UNAUTHENTICATED: malformed or duplicate session cookies, or an authentication rejection
+            from the session service. Missing, expired or revoked stored sessions are recreated on start.'
           headers:
             X-Server-Time:
               $ref: '#/components/headers/ServerTime'
@@ -108,9 +106,9 @@ paths:
       description: 'No request body. With submitted platform _O cookies, perform login verification to create a
         new session: successful PFC verification creates MEMBER and deletes used _O cookies. Incomplete, malformed
         or rejected credentials and PFC errors, timeouts or abnormal responses create GUEST through agent-session-service
-        and return 200. Without _O, reuse and extend a valid channel session; create GUEST only when the selected
-        channel cookie is absent. An expired, invalid or revoked SID presented for reuse returns 401 UNAUTHENTICATED.
-        On expiry, delete only the expired channel cookie. FE can then call start again: MEMBER loads conversation
+        and return 200. Without _O, reuse and extend a valid channel session; create GUEST when the selected
+        channel cookie is absent or its stored session is missing, expired or revoked. Replace the selected
+        channel cookie in the successful response: MEMBER loads conversation
         list and history, GUEST starts a new conversation. Member recovery requires fresh _O credentials. Session-service
         creation, lookup or update failure returns 503 UNAVAILABLE. Guest access to restricted channels returns
         403. userType is the string MEMBER or GUEST. Session requests, responses and storage contain no threadId.'

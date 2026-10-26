@@ -51,9 +51,9 @@ public class SessionAuthentication {
   public Session createOrReuse(HttpServletRequest request, HttpServletResponse response) {
     String channel = requestChannel(request);
     if (cookies.hasIdentity(request)) return createSession(request, response, channel);
-    Session session = findExisting(request, response, channel);
-    if (session == null) return createSession(request, response, channel);
-    requireUnexpired(response, session);
+    Session session = findExisting(request, response, channel, true);
+    if (session == null || session.expiresAt() <= clock.millis())
+      return createSession(request, response, channel);
     access.require(session);
     return refreshSession(response, session);
   }
@@ -70,18 +70,20 @@ public class SessionAuthentication {
     return refreshSession(response, session);
   }
 
-  /** SID가 없을 때만 null을 반환한다. 알 수 없거나 폐기된 SID는 신규 생성으로 우회하지 않는다. */
+  /** 시작 요청은 사라진 세션을 새로 만들고, 일반 API는 쿠키를 삭제한 뒤 거절한다. */
   private Session findExisting(
-      HttpServletRequest request, HttpServletResponse response, String channel) {
+      HttpServletRequest request, HttpServletResponse response, String channel, boolean restart) {
     String sid = cookies.session(request, channel);
     if (sid == null) return null;
     Session session = store.find(Credentials.hash(sid));
     if (session == null) {
+      if (restart) return null;
       cookies.clear(response, channel);
       throw GatewayException.unauthorized();
     }
     if (!session.channel().equals(channel)) throw GatewayException.denied();
     if (!"ACTIVE".equals(session.state())) {
+      if (restart) return null;
       cookies.clear(response, channel);
       throw GatewayException.unauthorized();
     }
@@ -90,7 +92,7 @@ public class SessionAuthentication {
 
   /** 조회·대화는 기존 유효 세션이 필수이며 만료 세션을 새로 만들지 않는다. */
   private Session requireActive(HttpServletRequest request, HttpServletResponse response) {
-    Session session = findExisting(request, response, requestChannel(request));
+    Session session = findExisting(request, response, requestChannel(request), false);
     if (session == null) throw GatewayException.unauthorized();
     requireUnexpired(response, session);
     access.require(session);

@@ -51,7 +51,7 @@ Accept: text/event-stream
   "forwardedProps": null
 }
 
-### 3. 세션 재사용 (200, 세션 만료 시 401)
+### 3. 세션 재사용 (200, 세션 부재·만료 시 새 게스트 세션 생성)
 # @no-cookie-jar
 POST {{baseUrl}}/api/auth/session?channelId={{channelId}}
 Origin: {{baseUrl}}
@@ -59,6 +59,9 @@ Cookie: {{entrySessionCookie}}
 
 > {%
     client.assert(response.status === 200, "세션 재사용 실패: " + response.status);
+    const name = "__Host-sh-session_" + request.variables.get("channelId").split("-")[0];
+    const cookie = response.headers.valuesOf("Set-Cookie").find(v => v.startsWith(name + "="));
+    if (cookie) client.global.set("entrySessionCookie", cookie.split(";")[0]);
     ["X-Chat-User-Type", "X-Chat-Auth-Expires-At", "X-Server-Time"].forEach(name => {
         client.assert(response.headers.valueOf(name) !== null, name + " 응답 헤더 없음");
     });

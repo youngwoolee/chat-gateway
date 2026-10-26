@@ -800,20 +800,20 @@ class SessionHttpIntegrationTest {
   }
 
   @Test
-  void expiryAndMissingSessionExposeOnlyServerTimeAndClearExpiredCookie() {
+  void expiredStartCreatesGuestWhileChatStillRequiresSession() {
     String sid = seed(false, clock.millis() - 1);
-    var expired =
+    var restarted =
         post("/api/auth/session")
             .cookie(SessionCookies.name(CHANNEL), sid)
             .exchange()
             .expectStatus()
-            .isUnauthorized()
+            .isOk()
             .expectHeader()
             .exists("X-Server-Time")
-            .doesNotExist("X-Chat-User-Type")
-            .doesNotExist("X-Chat-Auth-Expires-At");
-    assertThat(expired.getResponseCookies().getFirst(SessionCookies.name(CHANNEL)).getMaxAge())
-        .isEqualTo(Duration.ZERO);
+            .exists("X-Chat-User-Type")
+            .exists("X-Chat-Auth-Expires-At");
+    assertThat(restarted.getResponseCookies().getFirst(SessionCookies.name(CHANNEL)).getValue())
+        .isNotBlank().isNotEqualTo(sid);
     post("/api/chat")
         .bodyValue(Map.of("threadId", "any"))
         .exchange()
