@@ -1,7 +1,7 @@
 # Chatbot Gateway
 
 Java 21 / Spring Boot / MVC·Tomcat 기반 인증·HTTP/SSE 중계 서비스입니다.
-`ChatController → ChatService → AgentBackendClient`로 호출하며 SSE는 `SseRelayService`의 `SseEmitter`로 전달합니다. Spring Cloud Gateway 중계는 사용하지 않습니다.
+`ChatController → ChatService → AgentBackendClient`로 호출하며 B/E 호출은 WebClient로 비동기 처리합니다. SSE와 일반 응답은 `SseRelayService`의 `ResponseBodyEmitter`로 원문 그대로 전달하고, 연결 종료 시 구독을 취소합니다. Servlet 전송은 별도 작업 스레드에서 처리하며 세션·검색의 동기 호출은 RestClient를 사용합니다. Spring Cloud Gateway 중계는 사용하지 않습니다.
 
 **설계·동작·외부 연동 계약은 [agent-api-gw-session-summary.md](docs/agent-api-gw-session-summary.md) 한 곳에서 관리합니다.**
 

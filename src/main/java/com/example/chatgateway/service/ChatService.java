@@ -19,10 +19,9 @@ import java.net.URI;
 import java.util.Collections;
 import java.util.concurrent.Semaphore;
 import java.util.function.Function;
-import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
-import org.springframework.web.context.request.ServletWebRequest;
-import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyEmitter;
 
 /** 입력 확인 → 인증 → B/E 호출 → REST 또는 SSE 전송 순서로 처리한다. */
 @Service
@@ -53,7 +52,7 @@ public class ChatService {
   }
 
   /** 일반 JSON 발화를 검증하고 인증한 뒤 B/E 응답을 전달한다. */
-  public SseEmitter chat(HttpServletRequest request, HttpServletResponse response)
+  public ResponseBodyEmitter chat(HttpServletRequest request, HttpServletResponse response)
       throws Exception {
     byte[] body = readChatBody(request);
     thread(body);
@@ -69,8 +68,8 @@ public class ChatService {
   }
 
   /** 도구 요청은 경로의 대화 ID를 검증하고 원래 본문 그대로 전달한다. */
-  public SseEmitter tool(HttpServletRequest request, HttpServletResponse response, String threadId)
-      throws Exception {
+  public ResponseBodyEmitter tool(
+      HttpServletRequest request, HttpServletResponse response, String threadId) throws Exception {
     rejectMfa(request);
     Credentials.identifier(threadId);
     var body = request.getInputStream();
@@ -87,61 +86,35 @@ public class ChatService {
                 request.getContentLengthLong()));
   }
 
-  /** 조회는 세션을 연장하지 않으며 일반 HTTP 응답으로 처리한다. */
-  public void history(HttpServletRequest request, HttpServletResponse response, String threadId)
-      throws Exception {
-    acquire(request);
-    try {
-      rejectMfa(request);
-      if (threadId != null) Credentials.identifier(threadId);
-      var authenticated = authentication.authenticate(request, response, null, null);
-      try (var upstream =
-          backend.history(
-              target(request, authenticated), headers.request(request, authenticated))) {
-        copyHeaders(response, upstream);
-        if (upstream.status() != 200
-            || !new ServletWebRequest(request, response)
-                .checkNotModified(
-                    upstream.headers().getETag(), upstream.headers().getLastModified())) {
-          writeBody(response, upstream);
-        }
-      }
-    } finally {
-      admission.release();
-    }
+  /** 조회는 세션을 연장하지 않고 응답을 비동기로 중계한다. */
+  public ResponseBodyEmitter history(
+      HttpServletRequest request, HttpServletResponse response, String threadId) throws Exception {
+    rejectMfa(request);
+    if (threadId != null) Credentials.identifier(threadId);
+    return send(
+        request,
+        response,
+        null,
+        null,
+        authenticated ->
+            backend.history(
+                target(request, authenticated), headers.request(request, authenticated)));
   }
 
-  /** SSE 연결만 완료 콜백에 넘긴다. 일반 응답과 실패는 현재 요청에서 정리한다. */
-  private SseEmitter send(
+  private ResponseBodyEmitter send(
       HttpServletRequest request,
       HttpServletResponse response,
       byte[] body,
       MfaInput results,
-      Function<AuthenticatedChat, AgentBackendClient.Response> call)
+      Function<AuthenticatedChat, WebClient.RequestHeadersSpec<?>> call)
       throws Exception {
     acquire(request);
-    AgentBackendClient.Response upstream = null;
-    boolean streaming = false;
     try {
       var authenticated = authentication.authenticate(request, response, body, results);
-      upstream = call.apply(authenticated);
-      copyHeaders(response, upstream);
-      MediaType type = upstream.headers().getContentType();
-      if (hasBody(upstream) && type != null && MediaType.TEXT_EVENT_STREAM.isCompatibleWith(type)) {
-        SseEmitter emitter = streams.prepare(request, response, upstream, admission::release);
-        streaming = true;
-        return emitter;
-      }
-      writeBody(response, upstream);
-      return null;
-    } finally {
-      if (!streaming) {
-        try {
-          if (upstream != null) upstream.close();
-        } finally {
-          admission.release();
-        }
-      }
+      return streams.prepare(request, response, call.apply(authenticated), admission::release);
+    } catch (Exception error) {
+      admission.release();
+      throw error;
     }
   }
 
@@ -171,33 +144,6 @@ public class ChatService {
   private void rejectMfa(HttpServletRequest request) {
     if (mfaParser.parse(Collections.list(request.getHeaders("X-Mfa-Result"))) != null)
       throw GatewayException.badRequest();
-  }
-
-  private void copyHeaders(HttpServletResponse response, AgentBackendClient.Response upstream)
-      throws IOException {
-    response.setStatus(upstream.status());
-    upstream
-        .headers()
-        .forEach((name, values) -> values.forEach(value -> response.addHeader(name, value)));
-  }
-
-  private boolean hasBody(AgentBackendClient.Response upstream) throws IOException {
-    return upstream.status() != 204 && upstream.status() != 304;
-  }
-
-  private void writeBody(HttpServletResponse response, AgentBackendClient.Response upstream)
-      throws IOException {
-    response.flushBuffer();
-    if (!hasBody(upstream)) return;
-    // 조회 응답도 전체를 기다리지 않고 전달한다 (큰 아티팩트 포함).
-    var input = upstream.body();
-    var output = response.getOutputStream();
-    byte[] buffer = new byte[8192];
-    int count;
-    while ((count = input.read(buffer)) != -1) {
-      output.write(buffer, 0, count);
-      output.flush();
-    }
   }
 
   /** JSON은 threadId 검증에만 사용하고 전송 본문을 재직렬화하지 않는다. */

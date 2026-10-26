@@ -1,25 +1,36 @@
 package com.example.chatgateway.service;
 
 import com.example.chatgateway.client.agent.AgentBackendClient;
+import com.example.chatgateway.exception.GatewayException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import java.util.Arrays;
-import java.util.Set;
-import java.util.concurrent.atomic.AtomicBoolean;
+import org.reactivestreams.Subscription;
+import org.springframework.core.io.buffer.DataBuffer;
+import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
+import org.springframework.web.context.request.ServletWebRequest;
+import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.servlet.AsyncHandlerInterceptor;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
-import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyEmitter.DataWithMediaType;
-import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyEmitter;
+import reactor.core.publisher.BaseSubscriber;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.core.publisher.SignalType;
+import reactor.core.scheduler.Schedulers;
 
-/** SseEmitter 초기화 후에만 B/E 읽기를 시작하여 느린 FE에도 메모리 버퍼가 쌓이지 않게 한다. */
+/** MVC emitter 초기화 후 구독하여 SSE와 일반 응답을 원문 그대로 중계한다. */
 @Service
 public class SseRelayService implements WebMvcConfigurer, AsyncHandlerInterceptor {
   private static final String TASK = SseRelayService.class.getName() + ".task";
+  private final AgentBackendClient backend;
 
-  /** MVC가 emitter를 준비한 뒤 가상 스레드에서 한 연결을 순차 중계한다. */
+  public SseRelayService(AgentBackendClient backend) {
+    this.backend = backend;
+  }
+
   @Override
   public void addInterceptors(InterceptorRegistry registry) {
     registry.addInterceptor(this);
@@ -31,54 +42,94 @@ public class SseRelayService implements WebMvcConfigurer, AsyncHandlerIntercepto
     Runnable task = (Runnable) request.getAttribute(TASK);
     if (task != null) {
       request.removeAttribute(TASK);
-      Thread.startVirtualThread(task);
+      task.run();
     }
   }
 
-  /** 완료·브라우저 단절·타임아웃 모두 B/E 연결과 동시 요청 슬롯을 한 번만 반환한다. */
-  public SseEmitter prepare(
+  public ResponseBodyEmitter prepare(
       HttpServletRequest request,
       HttpServletResponse response,
-      AgentBackendClient.Response upstream,
+      WebClient.RequestHeadersSpec<?> upstream,
       Runnable release) {
-    var emitter = new SseEmitter(0L);
-    var closed = new AtomicBoolean();
-    Runnable close =
-        () -> {
-          if (!closed.compareAndSet(false, true)) return;
-          try {
-            upstream.close();
-          } finally {
+    var emitter = new ResponseBodyEmitter(0L);
+    var subscriber =
+        new BaseSubscriber<DataBuffer>() {
+          @Override
+          protected void hookOnSubscribe(Subscription subscription) {
+            request(1);
+          }
+
+          @Override
+          protected void hookOnNext(DataBuffer buffer) {
+            try {
+              byte[] bytes = new byte[buffer.readableByteCount()];
+              buffer.read(bytes);
+              emitter.send(bytes, MediaType.APPLICATION_OCTET_STREAM);
+            } catch (Exception error) {
+              cancel();
+              emitter.completeWithError(error);
+              return;
+            } finally {
+              DataBufferUtils.release(buffer);
+            }
+            request(1);
+          }
+
+          @Override
+          protected void hookOnComplete() {
+            emitter.complete();
+          }
+
+          @Override
+          protected void hookOnError(Throwable error) {
+            emitter.completeWithError(
+                response.isCommitted() ? error : GatewayException.unavailable());
+          }
+
+          @Override
+          protected void hookFinally(SignalType type) {
             release.run();
           }
         };
-    emitter.onCompletion(close);
-    emitter.onTimeout(close);
-    emitter.onError(error -> close.run());
+    emitter.onCompletion(subscriber::cancel);
+    emitter.onTimeout(subscriber::cancel);
+    emitter.onError(error -> subscriber.cancel());
     request.setAttribute(
         TASK,
         (Runnable)
-            () -> {
-              try {
-                // 첫 B/E 데이터가 늦어도 인증 쿠키와 상태는 즉시 전달한다.
-                response.flushBuffer();
-                byte[] buffer = new byte[8192];
-                int count;
-                var input = upstream.body();
-                while (!closed.get() && (count = input.read(buffer)) != -1) {
-                  // 이미 완성된 SSE 바이트를 전송한다. send(Object)는 data:를 다시 붙이므로 사용하지 않는다.
-                  emitter.send(
-                      Set.of(
-                          new DataWithMediaType(
-                              Arrays.copyOf(buffer, count), MediaType.APPLICATION_OCTET_STREAM)));
-                }
-                emitter.complete();
-              } catch (Exception error) {
-                emitter.completeWithError(error);
-              } finally {
-                close.run();
-              }
-            });
+            () ->
+                backend
+                    .exchange(
+                        upstream,
+                        received ->
+                            Mono.fromCallable(
+                                    () -> {
+                                      response.setStatus(received.status());
+                                      received
+                                          .headers()
+                                          .forEach(
+                                              (name, values) ->
+                                                  values.forEach(
+                                                      value -> response.addHeader(name, value)));
+                                      boolean notModified =
+                                          "GET".equals(request.getMethod())
+                                              && received.status() == 200
+                                              && new ServletWebRequest(request, response)
+                                                  .checkNotModified(
+                                                      received.headers().getETag(),
+                                                      received.headers().getLastModified());
+                                      // 첫 데이터가 늦어도 인증 쿠키와 B/E 상태를 즉시 전달한다.
+                                      response.flushBuffer();
+                                      return !notModified
+                                          && received.status() != 204
+                                          && received.status() != 304;
+                                    })
+                                .subscribeOn(Schedulers.boundedElastic())
+                                .flatMapMany(hasBody -> hasBody ? received.body() : Flux.empty()))
+                    // Servlet 쓰기는 blocking이므로 Netty event loop에서 분리하고 미리 읽기를 제한한다.
+                    .publishOn(Schedulers.boundedElastic(), 1)
+                    .doOnDiscard(DataBuffer.class, DataBufferUtils::release)
+                    .subscribe(subscriber));
     return emitter;
   }
 }
