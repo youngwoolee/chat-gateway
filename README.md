@@ -48,4 +48,4 @@ local/dev/prod는 EUREKA_URL·BACKEND_BASE_URL·서비스 토큰·채널·Docume
 - `Session` 저장·응답 DTO에서 `threadId`를 제거했습니다. 세션 서비스의 create/find/touch/replace-guest 계약도 맞춰 배포해야 합니다. 기존 restart 및 인증 등록·소비 API는 더 이상 호출하지 않습니다.
 - FE는 로그인 복귀 시 `_O`와 함께 start를 호출합니다. `/api/auth/session/restart`, `/internal/v1/auth/operations`, `X-Requested-Login` 로그인 전환은 제거했습니다.
 - PFC 어댑터는 `verify(MfaInput, state)`에서 티켓·식별값·`__state_as_id`를 검증/소비하고 회원 PID를 반환해야 합니다. 거절은 401/403 예외, 통신 실패는 503으로 구분합니다. 실제 HTTP 주소·직렬화 계약은 운영 PFC 구현에서 연결해야 합니다.
-- 게스트 대화 연결을 위해 기존 `guestSubject`와 `X-Authenticated-Guest-Id` 전달은 유지했습니다. B/E가 이 신원을 사용하는 방식은 별도 합의가 필요합니다. 추적용 `X-Request-Id`도 유지합니다.
+- B/E에는 `X-Authenticated-User-Id`(회원 PID 또는 게스트 ID), `X-Authenticated-Channel-Id`와 업무 인증 성공 시 `X-Verified-Request-Id`를 전달합니다. `X-Authenticated-Guest-Id`와 `X-Request-Id`는 전달하지 않습니다.

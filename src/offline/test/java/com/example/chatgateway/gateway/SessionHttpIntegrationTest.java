@@ -692,6 +692,8 @@ class SessionHttpIntegrationTest {
           .cookie(SessionCookies.name(CHANNEL), sid)
           .header("X-Verified-Request-Id", "spoofed")
           .header("X-Verified-Auth-Requests", "spoofed")
+          .header("X-Authenticated-Guest-Id", "spoofed")
+          .header("X-Request-Id", "spoofed")
           .bodyValue(Map.of("threadId", thread, "resume", java.util.List.of()))
           .exchange()
           .expectStatus()
@@ -702,6 +704,11 @@ class SessionHttpIntegrationTest {
           .isEqualTo(events);
       var chat = BACKEND.takeRequest(2, TimeUnit.SECONDS);
       assertThat(chat.getPath()).isEqualTo("/api/chat");
+      assertThat(chat.getHeader("X-Authenticated-User-Id"))
+          .isEqualTo(store.find(Credentials.hash(sid)).subject());
+      assertThat(chat.getHeader("X-Authenticated-Channel-Id")).isEqualTo(CHANNEL);
+      assertThat(chat.getHeader("X-Authenticated-Guest-Id")).isNull();
+      assertThat(chat.getHeader("X-Request-Id")).isNull();
       assertThat(chat.getHeader("X-Verified-Request-Id")).isNull();
       assertThat(chat.getHeader("X-Verified-Auth-Requests")).isNull();
       assertThat(mapper.readTree(chat.getBody().readUtf8()).path("threadId").asText())

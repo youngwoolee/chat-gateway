@@ -1,6 +1,5 @@
 package com.example.chatgateway.client.agent;
 
-import com.example.chatgateway.gateway.RequestIdFilter;
 import com.example.chatgateway.service.ChatAuthenticationService.AuthenticatedChat;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.Collections;
@@ -33,11 +32,8 @@ public class BackendHeaders {
     var session = authenticated.session();
     headers.set("X-Authenticated-User-Id", session.subject());
     headers.set("X-Authenticated-Channel-Id", session.channel());
-    String guest = session.member() ? session.guestSubject() : session.subject();
-    if (guest != null) headers.set("X-Authenticated-Guest-Id", guest);
     if (authenticated.verifiedRequestId() != null)
       headers.set("X-Verified-Request-Id", authenticated.verifiedRequestId());
-    headers.set("X-Request-Id", RequestIdFilter.id(request));
     return headers;
   }
 
@@ -76,7 +72,8 @@ public class BackendHeaders {
 
   /** 브라우저의 신원·서비스 인증·전달 경로 주장은 신뢰하지 않는다. */
   private boolean identity(String name) {
-    return name.startsWith("x-verified-")
+    return name.equals("x-request-id")
+        || name.startsWith("x-verified-")
         || name.equals("x-requested-login")
         || name.equals("cookie")
         || name.equals("authorization")

@@ -27,6 +27,15 @@ public class RequestIdFilter extends OncePerRequestFilter {
   protected void doFilterInternal(
       HttpServletRequest request, HttpServletResponse response, FilterChain chain)
       throws ServletException, IOException {
+    response.setHeader("X-Content-Type-Options", "nosniff");
+    response.setHeader("X-Frame-Options", "DENY");
+    response.setHeader("X-XSS-Protection", "0");
+    response.setHeader("Referrer-Policy", "no-referrer");
+    response.setHeader("Cache-Control", "no-cache, no-store, max-age=0, must-revalidate");
+    response.setHeader("Pragma", "no-cache");
+    response.setHeader("Expires", "0");
+    if (request.isSecure())
+      response.setHeader("Strict-Transport-Security", "max-age=31536000 ; includeSubDomains");
     response.setHeader("X-Server-Time", Long.toString(clock.millis()));
     String supplied = request.getHeader("X-Request-Id");
     request.setAttribute(
